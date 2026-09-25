@@ -45,11 +45,27 @@ The range track now uses one theme-dependent gradient with an inline `--range-pr
 
 The browser runner now reports native control feedback separately from the preview marker. These are three untraced repetitions with the same gesture, viewport, Chromium 145, and development/built setup as the baseline. The original range feedback columns were calculated afterward from the frame/input events in the saved #3073 captures. The new sampler also reads the track's inline progress each frame, so the original and new captures have slightly different instrumentation.
 
-| Mode        | Source            | Native value changes/s | Native matched p95 | Preview changes/s | Preview matched p95 | Track mismatches |
-| ----------- | ----------------- | ---------------------: | -----------------: | ----------------: | ------------------: | ---------------: |
-| Development | #3073 baseline    |              23.4-25.9 |         7.2-7.4 ms |           5.7-8.4 |    242.6-304.6 ms |      not recorded |
-| Development | Static range track |              22.3-29.4 |        5.2-40.6 ms |          7.4-13.2 |    176.8-239.5 ms |                0 |
-| Built       | #3073 baseline    |              38.7-46.3 |         5.5-5.6 ms |         19.2-23.6 |     81.5-161.2 ms |      not recorded |
-| Built       | Static range track |              34.9-36.7 |       16.7-20.7 ms |         18.2-21.2 |      57.9-124.0 ms |                0 |
+| Mode        | Source             | Native value changes/s | Native matched p95 | Preview changes/s | Preview matched p95 | Track mismatches |
+| ----------- | ------------------ | ---------------------: | -----------------: | ----------------: | ------------------: | ---------------: |
+| Development | #3073 baseline     |              23.4-25.9 |         7.2-7.4 ms |           5.7-8.4 |      242.6-304.6 ms |     not recorded |
+| Development | Static range track |              22.3-29.4 |        5.2-40.6 ms |          7.4-13.2 |      176.8-239.5 ms |                0 |
+| Built       | #3073 baseline     |              38.7-46.3 |         5.5-5.6 ms |         19.2-23.6 |       81.5-161.2 ms |     not recorded |
+| Built       | Static range track |              34.9-36.7 |       16.7-20.7 ms |         18.2-21.2 |       57.9-124.0 ms |                0 |
 
 All 806 development and 1,110 built track samples matched the current native value. Every run ended at exactly 1000 without a stale value after convergence. The manager-driven Home, ArrowRight, blur, reset, and navigation checks passed in all six runs. A focused browser story also checks the range value, track, callback, focus, blur, delayed acknowledgment, and reset. The local matched p95 varied from 5.2 to 40.6 ms in development and measured 16.7-20.7 ms built, versus 7.2-7.4 ms and 5.5-5.6 ms in the saved baseline. This change does not establish a local p95 improvement. Manager work still delays some input frames, and the preview misses the drag budget in all six repetitions. Development post-release animation missed its budget three times; built post-release animation missed it twice.
+
+## Preview args scheduling candidate (#3075)
+
+The draft scheduler waits for a queued rerender's canvas and ordinary lifecycle before acknowledging its args. During ordinary loading, rendering, and completion, multiple updates share one pending rerender of the latest args. The active render still completes its lifecycle and may emit `STORY_FINISHED`; intermediate pending args that never render receive no `STORY_ARGS_UPDATED` acknowledgement. Failed, aborted, and removed renders do not acknowledge their args. Updates during `play` retain their immediate rerender behavior, and destructured `mount` stories still use their existing remount path. Updates for stories with no active render retain their existing immediate acknowledgement.
+
+**This candidate regresses preview cadence and does not complete #3075.** Three untraced repetitions per condition used the same browser runner with `CHECK_PATHS=args`; the no-a11y condition uses `EXPERIMENT=no-a11y`. All nine preview runs reached exactly 1000, with zero obsolete displays after convergence, but all nine missed the local-state-relative cadence budget. The local-state reference displayed about 95-101 changes/s during these captures.
+
+| Mode        | Condition                    | Preview displayed changes/s | Displayed changes per drag | Post-release frame p95 | Obsolete displays after convergence |
+| ----------- | ---------------------------- | --------------------------: | -------------------------: | ---------------------: | ----------------------------------: |
+| Development | #3073 baseline, a11y enabled |                   42.7-47.8 |               not compared |           11.9-15.0 ms |                                   0 |
+| Development | Candidate, a11y enabled      |                   8.62-8.69 |                         10 |             9.2-9.3 ms |                                   0 |
+| Built       | #3073 baseline, a11y enabled |                   56.5-58.2 |               not compared |           15.2-15.6 ms |                                   0 |
+| Built       | Candidate, a11y enabled      |                   8.68-8.69 |                         10 |             9.3-9.3 ms |                                   0 |
+| Development | Candidate, a11y disabled     |                   9.49-9.55 |                         11 |             9.1-9.2 ms |                                   0 |
+
+Disabling a11y recovers less than one displayed change/s. The ordinary renderer's `waitForAnimations()` waits at least 100 ms before checking animations, including when a story has none. Serializing that work puts a roughly ten-render/s ceiling on this candidate. Manager costs remain separate: this comparison checks the preview-only `useArgs` path and does not establish a manager Controls improvement. The draft needs a decision on animation-settling and overlapping lifecycle work before it can meet the preview cadence target.

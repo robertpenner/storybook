@@ -2,7 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Channel } from 'storybook/internal/channels';
-import { STORY_FINISHED } from 'storybook/internal/core-events';
+import {
+  STORY_FINISHED,
+  STORY_RENDERED,
+  STORY_RENDER_PHASE_CHANGED,
+} from 'storybook/internal/core-events';
 import type {
   PreparedStory,
   Renderer,
@@ -56,6 +60,7 @@ const buildStory = (overrides: Partial<PreparedStory> = {}): PreparedStory =>
 
 const buildStore = (overrides: Partial<StoryStore<Renderer>> = {}): StoryStore<Renderer> =>
   ({
+    args: { get: vi.fn(() => ({})) },
     getStoryContext: () => ({
       reporting: new ReporterAPI(),
     }),
@@ -145,6 +150,104 @@ describe('StoryRender', () => {
       expect(renderToScreen).toHaveBeenCalledTimes(2);
       expect(story.playFunction).toHaveBeenCalledOnce();
     });
+  });
+
+  it('keeps a queued rerender pending until its own canvas and lifecycle finish', async () => {
+    const [firstCanvas, releaseFirst] = createGate();
+    const [secondCanvas, releaseSecond] = createGate();
+    const renderToScreen = vi
+      .fn()
+      .mockImplementationOnce(async () => firstCanvas)
+      .mockImplementationOnce(async () => secondCanvas);
+    const render = new StoryRender(
+      new Channel({}),
+      buildStore(),
+      renderToScreen,
+      {} as any,
+      entry.id,
+      'story',
+      { autoplay: false },
+      buildStory()
+    );
+
+    const initial = render.renderToElement({} as any);
+    await vi.waitFor(() => expect(renderToScreen).toHaveBeenCalledOnce());
+    const queued = render.rerender();
+    let completed = false;
+    Promise.resolve(queued).then(() => {
+      completed = true;
+    });
+    await Promise.resolve();
+    const completedBeforeFirstCanvas = completed;
+
+    releaseFirst();
+    await vi.waitFor(() => expect(renderToScreen).toHaveBeenCalledTimes(2));
+    const completedBeforeSecondCanvas = completed;
+    releaseSecond();
+    await Promise.all([initial, queued]);
+    await vi.waitFor(() => expect(render.phase).toBe('finished'));
+    expect(completedBeforeFirstCanvas).toBe(false);
+    expect(completedBeforeSecondCanvas).toBe(false);
+    expect(completed).toBe(true);
+  });
+
+  it('settles a queued rerender without rendering it when the active render is cancelled', async () => {
+    const [loaderGate, releaseLoader] = createGate();
+    const story = buildStory({ applyLoaders: vi.fn(() => loaderGate as any) });
+    const renderToScreen = vi.fn();
+    const render = new StoryRender(
+      new Channel({}),
+      buildStore(),
+      renderToScreen,
+      {} as any,
+      entry.id,
+      'story',
+      { autoplay: false },
+      story
+    );
+
+    const initial = render.renderToElement({} as any);
+    const queued = render.rerender();
+    render.cancelRender();
+
+    expect(await queued).toBeUndefined();
+    releaseLoader();
+    await initial;
+    expect(story.applyLoaders).toHaveBeenCalledOnce();
+    expect(renderToScreen).not.toHaveBeenCalled();
+  });
+
+  it('finishes the ordinary lifecycle before a rerender requested at STORY_RENDERED', async () => {
+    const channel = new Channel({});
+    const emit = vi.spyOn(channel, 'emit');
+    const renderToScreen = vi.fn();
+    const render = new StoryRender(
+      channel,
+      buildStore(),
+      renderToScreen,
+      {} as any,
+      entry.id,
+      'story',
+      { autoplay: false },
+      buildStory()
+    );
+    let queued: Promise<unknown> | undefined;
+    channel.on(STORY_RENDERED, () => {
+      if (!queued) {
+        queued = render.rerender();
+      }
+    });
+
+    await render.renderToElement({} as any);
+    await queued;
+
+    const events = emit.mock.calls.map(([event]) => event);
+    const loadingEvents = emit.mock.calls.flatMap(([event, payload], index) =>
+      event === STORY_RENDER_PHASE_CHANGED && payload.newPhase === 'loading' ? [index] : []
+    );
+    expect(renderToScreen).toHaveBeenCalledTimes(2);
+    expect(loadingEvents).toHaveLength(2);
+    expect(events.indexOf(STORY_FINISHED)).toBeLessThan(loadingEvents[1]);
   });
 
   it('calls mount if play function does not destructure mount', async () => {

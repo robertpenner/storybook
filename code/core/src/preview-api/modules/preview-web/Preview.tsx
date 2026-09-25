@@ -352,20 +352,30 @@ export class Preview<TRenderer extends Renderer> {
       throw new CalledPreviewMethodBeforeInitializationError({ methodName: 'onUpdateArgs' });
     }
     this.storyStoreValue.args.update(storyId, updatedArgs);
-
-    await Promise.all(
-      this.storyRenders
-        .filter((r) => r.id === storyId && !r.renderOptions.forceInitialArgs)
-        .map((r) =>
-          // We only run the play function, with in a force remount.
-          // But when mount is destructured, the rendering happens inside of the play function.
-          r.story && r.story.usesMount ? r.remount() : r.rerender()
-        )
+    const args = this.storyStoreValue.args.get(storyId);
+    const renders = this.storyRenders.filter(
+      (r) => r.id === storyId && !r.renderOptions.forceInitialArgs
     );
 
+    const renderedArgs = await Promise.all(
+      renders.map((r) =>
+        // We only run the play function, within a force remount.
+        // But when mount is destructured, the rendering happens inside of the play function.
+        r.story && r.story.usesMount ? r.remount() : r.rerender()
+      )
+    );
+
+    if (
+      this.storyStoreValue.args.get(storyId) !== args ||
+      renders.some(
+        (render, index) => !this.storyRenders.includes(render) || renderedArgs[index] !== args
+      )
+    ) {
+      return;
+    }
     this.channel.emit(STORY_ARGS_UPDATED, {
       storyId,
-      args: this.storyStoreValue.args.get(storyId),
+      args,
     });
   }
 
