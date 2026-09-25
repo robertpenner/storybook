@@ -20,6 +20,9 @@ type ObservedEvent = {
   };
   markerX?: number | null;
   controlValue?: string | null;
+  controlProgress?: string | null;
+  controlMin?: string | null;
+  controlMax?: string | null;
   key?: string;
   experiment?: string;
 };
@@ -60,6 +63,36 @@ export function summarize(events: ObservedEvent[]) {
     );
     if (input) latencies.push(frame.time - input.time);
   }
+  const controlFrames = events.filter(
+    (event) =>
+      event.kind === 'frame' && event.controlValue !== null && event.controlValue !== undefined
+  );
+  assert.ok(controlFrames.length >= 2, 'Missing range input frame samples');
+  const changedControls = controlFrames.filter(
+    (frame, index) => index === 0 || frame.controlValue !== controlFrames[index - 1].controlValue
+  );
+  const duringControl = changedControls.filter(
+    (frame) => frame.time >= firstInput.time && frame.time <= release.time
+  );
+  const controlLatencies = duringControl.flatMap((frame) => {
+    const input = inputs.findLast(
+      (input) => input.value === Number(frame.controlValue) && input.time <= frame.time
+    );
+    return input ? [frame.time - input.time] : [];
+  });
+  const trackFrames = controlFrames.filter((frame) => frame.controlProgress?.trim());
+  const trackMismatches = trackFrames.filter((frame) => {
+    const progress = frame.controlProgress!.trim();
+    const min = Number(frame.controlMin);
+    const max = Number(frame.controlMax);
+    const value = Number(frame.controlValue);
+    const percentage = ((value - min) / (max - min)) * 100;
+    const expected = Number.isFinite(percentage) ? Math.max(0, Math.min(100, percentage)) : 0;
+    const observed = Number.parseFloat(progress);
+    return (
+      !progress.endsWith('%') || !Number.isFinite(observed) || Math.abs(observed - expected) > 0.01
+    );
+  });
   const convergence = frames.find(
     (frame) => frame.time >= lastInput.time && frame.value === lastInput.value
   );
@@ -103,6 +136,20 @@ export function summarize(events: ObservedEvent[]) {
     displayedChanges: during.length,
     displayedFraction: during.length / inputs.length,
     displayedHz: (during.length * 1000) / (release.time - firstInput.time),
+    controlFeedback: {
+      displayedChanges: duringControl.length,
+      displayedFraction: duringControl.length / inputs.length,
+      displayedHz: (duringControl.length * 1000) / (release.time - firstInput.time),
+      matchedChanges: controlLatencies.length,
+      latencyMs: {
+        p50: quantile(controlLatencies, 0.5),
+        p95: quantile(controlLatencies, 0.95),
+        max: quantile(controlLatencies, 1),
+      },
+      finalValue: Number(controlFrames.at(-1)?.controlValue),
+      trackSamples: trackFrames.length,
+      trackMismatches: trackMismatches.length,
+    },
     frameIntervalMs: quantile(frameIntervals, 0.5),
     postReleaseFrameIntervalMs: {
       p50: quantile(postReleaseFrameIntervals, 0.5),
@@ -193,10 +240,14 @@ function instrument(experiment: string) {
   function frame() {
     const output = document.querySelector('[data-latency-output]');
     const marker = document.querySelector('[data-latency-marker]');
+    const control = document.querySelector<HTMLInputElement>('input[type="range"]');
     record('frame', {
       value: output ? Number(output.textContent) : null,
       markerX: marker?.getBoundingClientRect().x ?? null,
-      controlValue: document.querySelector<HTMLInputElement>('input[type="range"]')?.value ?? null,
+      controlValue: control?.value ?? null,
+      controlProgress: control?.style.getPropertyValue('--range-progress') ?? null,
+      controlMin: control?.min ?? null,
+      controlMax: control?.max ?? null,
     });
     requestAnimationFrame(frame);
   }
@@ -238,6 +289,17 @@ async function verifyInteractions(
       String(value),
       `${name}: obsolete value returned`
     );
+    if (inputPath === 'manager') {
+      const control = await slider.evaluate((input: HTMLInputElement) => ({
+        value: Number(input.value),
+        progress: input.style.getPropertyValue('--range-progress').trim(),
+      }));
+      assert.equal(control.value, value, `${name}: manager range value is stale`);
+      assert.ok(
+        Math.abs(Number.parseFloat(control.progress) - value / 10) < 0.01,
+        `${name}: manager track is stale`
+      );
+    }
     checks.push({ name, value });
   }
   await slider.press('Home');
@@ -461,6 +523,15 @@ async function measure(
   await writeFile(resolve(out, `${stem}.json`), JSON.stringify(capture, null, 2));
   assert.deepEqual(errors, [], 'Browser errors');
   assert.equal(summary.finalValue, summary.expectedFinalValue, 'Final output is stale');
+  if (inputPath === 'manager') {
+    assert.equal(
+      summary.controlFeedback.finalValue,
+      summary.expectedFinalValue,
+      'Final manager range value is stale'
+    );
+    assert.ok(summary.controlFeedback.trackSamples > 0, 'Manager track was not sampled');
+    assert.equal(summary.controlFeedback.trackMismatches, 0, 'Manager track is stale');
+  }
   assert.equal(
     summary.obsoleteDisplaysAfterConvergence,
     0,
@@ -541,6 +612,7 @@ export async function main() {
       [
         'code/.storybook/diagnostics/ControlsLatency.stories.tsx',
         'code/.storybook/main.ts',
+        'code/addons/docs/src/blocks/controls/Range.tsx',
         'code/core/template/stories/preview.ts',
         'scripts/controls-latency/storybook-controls-latency.ts',
       ].map((name) => [
