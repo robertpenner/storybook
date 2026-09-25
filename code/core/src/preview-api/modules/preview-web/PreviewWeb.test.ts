@@ -18,6 +18,7 @@ import {
   STORY_ARGS_UPDATED,
   STORY_CHANGED,
   STORY_ERRORED,
+  STORY_FINISHED,
   STORY_MISSING,
   STORY_PREPARED,
   STORY_RENDERED,
@@ -991,6 +992,100 @@ describe('PreviewWeb', () => {
         storyId: 'component-one--a',
         args: { foo: 'a', new: 'arg', one: 1 },
       });
+    });
+
+    it('acknowledges only the latest args after their queued render finishes', async () => {
+      document.location.search = '?id=component-one--a';
+      const preview = await createAndRenderPreview();
+      const [loaderGate, releaseLoader] = createGate();
+      componentOneExports.default.loaders[0].mockImplementationOnce(async () => loaderGate);
+      mockChannel.emit.mockClear();
+      projectAnnotations.renderToCanvas.mockClear();
+
+      const first = preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'first' },
+      });
+      await vi.waitFor(() => {
+        expect(componentOneExports.default.loaders[0]).toHaveBeenCalledTimes(2);
+      });
+      const skipped = preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'skipped' },
+      });
+      const latest = preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'latest' },
+      });
+      await Promise.resolve();
+      const earlyAcknowledgements = mockChannel.emit.mock.calls.filter(
+        ([event]) => event === STORY_ARGS_UPDATED
+      );
+
+      releaseLoader({ l: 'first' });
+      await Promise.all([first, skipped, latest]);
+      await vi.waitFor(() => {
+        expect(projectAnnotations.renderToCanvas).toHaveBeenCalledTimes(2);
+      });
+      await vi.waitFor(() => {
+        expect(
+          mockChannel.emit.mock.calls.filter(([event]) => event === STORY_FINISHED)
+        ).toHaveLength(2);
+      });
+
+      expect(earlyAcknowledgements).toHaveLength(0);
+      expect(
+        projectAnnotations.renderToCanvas.mock.calls.map(
+          ([context]) => context.storyContext.args.foo
+        )
+      ).toEqual(['first', 'latest']);
+      const acknowledgements = mockChannel.emit.mock.calls.filter(
+        ([event]) => event === STORY_ARGS_UPDATED
+      );
+      expect(acknowledgements).toEqual([
+        [STORY_ARGS_UPDATED, { storyId: 'component-one--a', args: { foo: 'latest', one: 1 } }],
+      ]);
+      const events = mockChannel.emit.mock.calls.map(([event]) => event);
+      expect(events.lastIndexOf(STORY_FINISHED)).toBeLessThan(events.indexOf(STORY_ARGS_UPDATED));
+    });
+
+    it('does not acknowledge a final value when its render fails', async () => {
+      document.location.search = '?id=component-one--a';
+      const preview = await createAndRenderPreview();
+      projectAnnotations.renderToCanvas.mockRejectedValueOnce(new Error('render failed'));
+      mockChannel.emit.mockClear();
+
+      await preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'failed' },
+      });
+      await waitForEvents([STORY_FINISHED]);
+
+      expect(mockChannel.emit).toHaveBeenCalledWith(
+        STORY_FINISHED,
+        expect.objectContaining({ storyId: 'component-one--a', status: 'error' })
+      );
+      expect(mockChannel.emit).not.toHaveBeenCalledWith(STORY_ARGS_UPDATED, expect.anything());
+    });
+
+    it('does not acknowledge args after navigating away from their active render', async () => {
+      document.location.search = '?id=component-one--a';
+      const preview = await createAndRenderPreview();
+      const [canvasGate, releaseCanvas] = createGate();
+      projectAnnotations.renderToCanvas.mockImplementationOnce(async () => canvasGate);
+      mockChannel.emit.mockClear();
+      projectAnnotations.renderToCanvas.mockClear();
+
+      const update = preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'departed' },
+      });
+      await vi.waitFor(() => expect(projectAnnotations.renderToCanvas).toHaveBeenCalledOnce());
+      await preview.onSetCurrentStory({ storyId: 'component-one--b' });
+      releaseCanvas();
+      await update;
+
+      expect(mockChannel.emit).not.toHaveBeenCalledWith(STORY_ARGS_UPDATED, expect.anything());
     });
 
     it('sets new args on the store', async () => {

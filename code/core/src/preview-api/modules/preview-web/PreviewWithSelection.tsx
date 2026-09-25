@@ -277,7 +277,7 @@ export class PreviewWithSelection<TRenderer extends Renderer> extends Preview<TR
   }
 
   async onUpdateArgs({ storyId, updatedArgs }: { storyId: StoryId; updatedArgs: Args }) {
-    super.onUpdateArgs({ storyId, updatedArgs });
+    return super.onUpdateArgs({ storyId, updatedArgs });
   }
 
   async onPreloadStories({ ids }: { ids: string[] }) {

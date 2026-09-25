@@ -12,6 +12,7 @@ import {
   NoStoryMountedError,
 } from 'storybook/internal/preview-errors';
 import type {
+  Args,
   Canvas,
   PreparedStory,
   RenderContext,
@@ -71,7 +72,11 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
 
   private notYetRendered = true;
 
-  private rerenderEnqueued = false;
+  private rerenderEnqueued?: {
+    promise: Promise<Args | undefined>;
+    resolve: (args: Args | undefined) => void;
+    reject: (error: unknown) => void;
+  };
 
   public disableKeyListeners = false;
 
@@ -165,7 +170,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
     // function below right away, so if the user changes story during the first render we can cancel
     // it without having to first wait for it to finish.
     // Whenever the selection changes we want to force the component to be remounted.
-    return this.render({ initial: true, forceRemount: true });
+    await this.render({ initial: true, forceRemount: true });
   }
 
   private storyContext() {
@@ -259,6 +264,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
           return mountReturn;
         },
       };
+      const renderedArgs = this.store.args.get(this.id);
 
       context.context = context;
 
@@ -378,6 +384,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
         }
       }
 
+      const canvasErrored = this.phase === 'errored';
       await this.runPhase(abortSignal, 'completing', async () => {
         if (isTestEnvironment()) {
           this.store.addCleanupCallbacks(story, pauseAnimations());
@@ -402,7 +409,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
         (report) => report.status === 'failed'
       );
 
-      const hasStoryErrored = hasUnhandledErrors || hasSomeReportsFailed;
+      const hasStoryErrored = canvasErrored || hasUnhandledErrors || hasSomeReportsFailed;
 
       await this.runPhase(abortSignal, 'finished', async () =>
         this.channel.emit(STORY_FINISHED, {
@@ -411,6 +418,8 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
           reporters: context.reporting.reports,
         } as StoryFinishedPayload)
       );
+      this.renderQueued(abortSignal);
+      return !abortSignal.aborted && !hasStoryErrored ? renderedArgs : undefined;
     } catch (err) {
       this.phase = 'errored';
       this.callbacks.showException(err as Error);
@@ -424,10 +433,19 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
       );
     }
 
-    // If a rerender was enqueued during the render, clear the queue and render again
-    if (this.rerenderEnqueued) {
-      this.rerenderEnqueued = false;
-      this.render();
+    this.renderQueued(abortSignal);
+    return undefined;
+  }
+
+  private renderQueued(abortSignal: AbortSignal) {
+    const queued = this.rerenderEnqueued;
+    this.rerenderEnqueued = undefined;
+    if (queued) {
+      if (abortSignal.aborted) {
+        queued.resolve(undefined);
+      } else {
+        void this.render().then(queued.resolve, queued.reject);
+      }
     }
   }
 
@@ -438,8 +456,21 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
    * playing.
    */
   async rerender() {
-    if (this.isPending() && this.phase !== 'playing') {
-      this.rerenderEnqueued = true;
+    if (
+      this.phase !== 'playing' &&
+      (this.isPending() ||
+        ['played', 'completing', 'completed'].includes(this.phase as RenderPhase))
+    ) {
+      if (!this.rerenderEnqueued) {
+        let resolve!: (args: Args | undefined) => void;
+        let reject!: (error: unknown) => void;
+        const promise = new Promise<Args | undefined>((done, fail) => {
+          resolve = done;
+          reject = fail;
+        });
+        this.rerenderEnqueued = { promise, resolve, reject };
+      }
+      return this.rerenderEnqueued.promise;
     } else {
       return this.render();
     }
@@ -457,6 +488,8 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
   // happens inside the user's code.
   cancelRender() {
     this.abortController.abort();
+    this.rerenderEnqueued?.resolve(undefined);
+    this.rerenderEnqueued = undefined;
   }
 
   cancelPlayFunction() {
