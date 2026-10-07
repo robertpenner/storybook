@@ -50,7 +50,7 @@ export function createArgsInteraction<TArgs extends Args = Args>({
         interactionId: string;
         promise: Promise<ArgsInteractionResult<TArgs>>;
         resolve: (result: ArgsInteractionResult<TArgs>) => void;
-        finishing: boolean;
+        phase: 'active' | 'finishing' | 'cancelling';
         updatedArgs: Partial<TArgs>;
       }
     | undefined;
@@ -61,23 +61,34 @@ export function createArgsInteraction<TArgs extends Args = Args>({
     session = undefined;
     channel.removeListener(ARGS_INTERACTION_RESULT, onResult);
     channel.removeListener(STORY_CHANGED, onStoryChanged);
-    channel.removeListener(STORY_HOT_UPDATED, onStoryChanged);
+    channel.removeListener(STORY_HOT_UPDATED, onStoryHotUpdated);
     channel.removeListener(CHANNEL_WS_DISCONNECT, onStoryChanged);
     previous?.resolve(result);
   };
   const onResult = (payload: ArgsInteractionResultPayload<TArgs>) => {
     if (payload.storyId !== storyId || payload.interactionId !== session?.interactionId) return;
+    const fallbackArgs =
+      payload.status === 'unsupported' && session?.phase !== 'cancelling'
+        ? session?.updatedArgs
+        : undefined;
     settle(
       payload.status === 'completed'
         ? { status: 'completed', args: payload.args }
         : { status: payload.status }
     );
+    if (fallbackArgs && Object.keys(fallbackArgs).length && !disposed) {
+      updateOrdinary(fallbackArgs);
+    }
   };
   const onStoryChanged = () => {
     disposed = true;
     settle({ status: 'cancelled' });
   };
+  const onStoryHotUpdated = () => settle({ status: 'cancelled' });
   const updateOrdinary = (updatedArgs: Partial<TArgs>) => {
+    if (session?.phase === 'finishing') {
+      session.updatedArgs = { ...session.updatedArgs, ...updatedArgs };
+    }
     if (settledResult?.status === 'completed') settledResult = undefined;
     channel.emit(UPDATE_STORY_ARGS, { storyId, updatedArgs });
   };
@@ -85,7 +96,7 @@ export function createArgsInteraction<TArgs extends Args = Args>({
   return {
     begin() {
       if (disposed || !supported) return false;
-      if (session) return !session.finishing;
+      if (session) return session.phase === 'active';
       settledResult = undefined;
       let resolve!: (result: ArgsInteractionResult<TArgs>) => void;
       const promise = new Promise<ArgsInteractionResult<TArgs>>((done) => {
@@ -95,19 +106,19 @@ export function createArgsInteraction<TArgs extends Args = Args>({
         interactionId: `${Date.now()}-${++nextInteractionId}-${Math.random().toString(36).slice(2)}`,
         promise,
         resolve,
-        finishing: false,
+        phase: 'active',
         updatedArgs: {},
       };
       channel.on(ARGS_INTERACTION_RESULT, onResult);
       channel.on(STORY_CHANGED, onStoryChanged);
-      channel.on(STORY_HOT_UPDATED, onStoryChanged);
+      channel.on(STORY_HOT_UPDATED, onStoryHotUpdated);
       channel.on(CHANNEL_WS_DISCONNECT, onStoryChanged);
       channel.emit(ARGS_INTERACTION_BEGIN, { storyId, interactionId: session.interactionId });
       return true;
     },
     update(updatedArgs) {
       if (disposed) return;
-      if (!session || session.finishing) {
+      if (!session || session.phase !== 'active') {
         updateOrdinary(updatedArgs);
       } else {
         session.updatedArgs = { ...session.updatedArgs, ...updatedArgs };
@@ -136,7 +147,7 @@ export function createArgsInteraction<TArgs extends Args = Args>({
       }
       const current = session;
       if (
-        current.finishing &&
+        current.phase !== 'active' &&
         updatedArgs &&
         Object.entries(updatedArgs).some(
           ([key, value]) =>
@@ -146,8 +157,8 @@ export function createArgsInteraction<TArgs extends Args = Args>({
         updateOrdinary(updatedArgs);
         return Promise.resolve({ status: 'unsupported' });
       }
-      if (!current.finishing) {
-        current.finishing = true;
+      if (current.phase === 'active') {
+        current.phase = 'finishing';
         current.updatedArgs = { ...current.updatedArgs, ...updatedArgs };
         channel.emit(ARGS_INTERACTION_FINISH, {
           storyId,
@@ -162,7 +173,7 @@ export function createArgsInteraction<TArgs extends Args = Args>({
         return Promise.resolve(settledResult ?? { status: disposed ? 'cancelled' : 'unsupported' });
       }
       const current = session;
-      current.finishing = true;
+      current.phase = 'cancelling';
       channel.emit(ARGS_INTERACTION_CANCEL, { storyId, interactionId: current.interactionId });
       return current.promise;
     },

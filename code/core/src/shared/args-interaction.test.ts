@@ -6,12 +6,149 @@ import {
   ARGS_INTERACTION_FINISH,
   ARGS_INTERACTION_RESULT,
   STORY_CHANGED,
+  STORY_HOT_UPDATED,
   UPDATE_STORY_ARGS,
 } from '../core-events/index.ts';
 
 import { createArgsInteraction } from './args-interaction.ts';
 
 describe('createArgsInteraction', () => {
+  it.each(['update', 'finish'] as const)(
+    'replays queued %s args when a busy preview rejects begin asynchronously',
+    async (operation) => {
+      const channel = new Channel({});
+      const updates: unknown[] = [];
+      let identity = { storyId: 'story', interactionId: '' };
+      channel.on(ARGS_INTERACTION_BEGIN, (payload) => {
+        identity = payload;
+      });
+      channel.on(UPDATE_STORY_ARGS, (payload) => updates.push(payload));
+      const client = createArgsInteraction<{ value: number; label: string }>({
+        channel,
+        storyId: 'story',
+        supported: true,
+      });
+      expect(client.begin()).toBe(true);
+      client.update({ value: 3 });
+      client.update({ label: 'latest' });
+      const completion = operation === 'finish' ? client.finish({ value: 9 }) : undefined;
+      expect(updates).toEqual([]);
+      channel.emit(ARGS_INTERACTION_RESULT, { ...identity, status: 'unsupported' });
+      expect(updates).toEqual([
+        {
+          storyId: 'story',
+          updatedArgs: { value: operation === 'finish' ? 9 : 3, label: 'latest' },
+        },
+      ]);
+      if (completion) await expect(completion).resolves.toEqual({ status: 'unsupported' });
+      await expect(client.finish()).resolves.toEqual({ status: 'unsupported' });
+      client.dispose();
+    }
+  );
+
+  it('does not replay a rejected begin after navigation', async () => {
+    const channel = new Channel({});
+    const updates: unknown[] = [];
+    let identity = { storyId: 'story', interactionId: '' };
+    channel.on(ARGS_INTERACTION_BEGIN, (payload) => {
+      identity = payload;
+    });
+    channel.on(UPDATE_STORY_ARGS, (payload) => updates.push(payload));
+    const client = createArgsInteraction<{ value: number }>({
+      channel,
+      storyId: 'story',
+      supported: true,
+    });
+    client.begin();
+    const completion = client.finish({ value: 9 });
+    channel.emit(STORY_CHANGED, 'other');
+    channel.emit(ARGS_INTERACTION_RESULT, { ...identity, status: 'unsupported' });
+    await expect(completion).resolves.toEqual({ status: 'cancelled' });
+    expect(updates).toEqual([]);
+    client.dispose();
+  });
+
+  it.each(['update', 'finish'] as const)(
+    'preserves a newer ordinary %s when an earlier begin is rejected',
+    async (operation) => {
+      const channel = new Channel({});
+      const updates: unknown[] = [];
+      let identity = { storyId: 'story', interactionId: '' };
+      channel.on(ARGS_INTERACTION_BEGIN, (payload) => {
+        identity = payload;
+      });
+      channel.on(UPDATE_STORY_ARGS, (payload) => updates.push(payload));
+      const client = createArgsInteraction<{ value: number; label: string }>({
+        channel,
+        storyId: 'story',
+        supported: true,
+      });
+      client.begin();
+      client.update({ value: 3, label: 'latest' });
+      const previous = client.finish({ value: 9 });
+      const next = operation === 'finish' ? client.finish({ value: 11 }) : undefined;
+      if (operation === 'update') client.update({ value: 11 });
+      channel.emit(ARGS_INTERACTION_RESULT, { ...identity, status: 'unsupported' });
+      expect(updates).toEqual([
+        { storyId: 'story', updatedArgs: { value: 11 } },
+        { storyId: 'story', updatedArgs: { value: 11, label: 'latest' } },
+      ]);
+      await expect(previous).resolves.toEqual({ status: 'unsupported' });
+      if (next) await expect(next).resolves.toEqual({ status: 'unsupported' });
+      client.dispose();
+    }
+  );
+
+  it('does not replay cancelled inputs when a busy preview rejects begin', async () => {
+    const channel = new Channel({});
+    const updates: unknown[] = [];
+    let identity = { storyId: 'story', interactionId: '' };
+    channel.on(ARGS_INTERACTION_BEGIN, (payload) => {
+      identity = payload;
+    });
+    channel.on(UPDATE_STORY_ARGS, (payload) => updates.push(payload));
+    const client = createArgsInteraction<{ value: number }>({
+      channel,
+      storyId: 'story',
+      supported: true,
+    });
+    client.begin();
+    client.update({ value: 3 });
+    const cancelled = client.cancel();
+    channel.emit(ARGS_INTERACTION_RESULT, { ...identity, status: 'unsupported' });
+    await expect(cancelled).resolves.toEqual({ status: 'unsupported' });
+    expect(updates).toEqual([]);
+    client.dispose();
+  });
+
+  it('cancels a hot-updated gesture and lets the same client begin again', async () => {
+    const channel = new Channel({});
+    let identity = { storyId: 'story', interactionId: '' };
+    channel.on(ARGS_INTERACTION_BEGIN, (payload) => {
+      identity = payload;
+    });
+    const client = createArgsInteraction<{ value: number }>({
+      channel,
+      storyId: 'story',
+      supported: true,
+    });
+    client.begin();
+    const previousIdentity = identity;
+    const previous = client.finish({ value: 9 });
+    channel.emit(STORY_HOT_UPDATED);
+    await expect(previous).resolves.toEqual({ status: 'cancelled' });
+    expect(client.begin()).toBe(true);
+    const next = client.finish({ value: 11 });
+    channel.emit(ARGS_INTERACTION_RESULT, { ...previousIdentity, status: 'unsupported' });
+    channel.emit(ARGS_INTERACTION_RESULT, {
+      ...identity,
+      status: 'completed',
+      args: { value: 11 },
+    });
+    await expect(next).resolves.toEqual({ status: 'completed', args: { value: 11 } });
+    client.dispose();
+  });
+
   it('treats an undefined patch as removing an existing undefined key', async () => {
     const channel = new Channel({});
     const updates: unknown[] = [];
