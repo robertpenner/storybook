@@ -643,9 +643,22 @@ export const init: ModuleFn<SubAPI, SubState> = ({
 
       const gotoStory = (entry?: API_HashEntry) => {
         if (entry?.type === 'docs' || entry?.type === 'story') {
-          store.setState({ settings: { ...settings, lastTrackedStoryId: entry.id } });
-          navigateWithQueryParams(
-            `/${entry.type}/${entry.refId ? `${entry.refId}_${entry.id}` : entry.id}${scrollTo ? `#${scrollTo}` : ''}`
+          const { customQueryParams, refId: currentRefId } = store.getState();
+          const nextQueryParams = { ...customQueryParams };
+          if (entry.id !== storyId || entry.refId !== currentRefId) {
+            // An idle URL update can still contain the previous story's args.
+            delete nextQueryParams.args;
+          }
+          store.setState({
+            settings: { ...settings, lastTrackedStoryId: entry.id },
+            customQueryParams: nextQueryParams,
+          });
+          navigate(
+            buildNavigationUrl(
+              `/${entry.type}/${entry.refId ? `${entry.refId}_${entry.id}` : entry.id}${scrollTo ? `#${scrollTo}` : ''}`,
+              nextQueryParams
+            ),
+            undefined
           );
           return true;
         }

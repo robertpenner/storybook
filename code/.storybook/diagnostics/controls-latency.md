@@ -10,6 +10,16 @@ Initial three-run captures retain accessibility and the original budgets. Develo
 
 Acceptance remains incomplete. All three development manager captures exceed the post-release long-frame allowance (six frames over 25 ms, against a local count of zero). Two built manager captures miss the relative cadence budget. A separate development probe with automatic accessibility disabled still fails, so removing accessibility does not resolve the remaining manager cost. These captures and the CPU profile are retained in the resumed AFK run's `3078-*` scratch directories. No budget was relaxed, and this checkpoint does not complete #3078.
 
+## Runtime repairs after the checkpoint
+
+Deferred preview renders now replace pending effects, so final completion runs effects for the latest args and cleans the previously committed effects once. The manager retains its converted theme until the theme input changes. The previous conversion created a new theme for every manager state update and made all 133 displayed sidebar nodes render during each long scheduler callback.
+
+Three subsequent development baseline runs and three built runs pass the unchanged budgets with a11y enabled. Development manager cadence is 81.2-92.9 displayed changes/s, matched p95 is 10.9-11.4 ms, and each run has one post-release frame over 25 ms (maximum 31.3 ms). Built cadence is 92.0-96.3/s, matched p95 is 10.9-11.3 ms, and runs have zero or one post-release frame over 25 ms (maximum 117.2 ms). All reach 1000 with exact completed args, one final baseline canvas, passed final a11y, no obsolete display, and no track mismatch. Earlier development batches on the same repairs had cadence failures; those captures remain recorded.
+
+Navigation during a pending loader or hook can require an iframe reload. Manager selection and the preview URL now remove the previous story's args when changing stories, so that reload cannot apply an obsolete slider value to the new story. Reselecting the same story retains its URL args; globals and other query parameters remain intact. Explicit initial args for wildcard selection remain supported.
+
+The development finite-animation/loader/beforeEach/afterEach matrix completes all final-report and gesture workflows after that repair. One finite-animation capture records three post-release frames over 25 ms and misses that condition's numerical allowance. Its final value, lifecycle, a11y report, and navigation checks pass. Built lifecycle verification and final series review remain pending.
+
 The diagnostic story and browser runner reproduce [Penner #3073](https://github.com/robertpenner/penner/issues/3073) against `robertpenner/storybook` at `6643f314a1ebf29a2736536970b49e53d92bdd87`. This is the unmodified fork runtime. The story adds a dark, cheap moving marker and a numeric output; it does not change production Controls or args behavior.
 
 ## Run it

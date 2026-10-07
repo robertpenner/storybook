@@ -61,6 +61,26 @@ describe('UrlStore', () => {
         'pathname?foo=bar&id=story--id&viewMode=story#foobar'
       );
     });
+    it.each([
+      ['id=story--id', 'story--id', 'value:1'],
+      ['id=story--id', 'story--other', null],
+      ['path=/story/story--id', 'story--other', null],
+      ['id=*', 'story--id', 'value:1'],
+    ])(
+      'preserves persisted args only for the same selected story (%s, %s)',
+      (source, storyId, args) => {
+        document.location.search = `?${source}&args=value:1&globals=theme:dark&foo=bar`;
+        document.location.hash = '';
+        setPath({ storyId, viewMode: 'story' });
+        const url = vi.mocked(history.replaceState).mock.lastCall?.[2];
+        expect(url).toBeTypeOf('string');
+        const query = new URLSearchParams(String(url).split('?')[1]);
+        expect(query.get('id')).toBe(storyId);
+        expect(query.get('args')).toBe(args);
+        expect(query.get('globals')).toBe('theme:dark');
+        expect(query.get('foo')).toBe('bar');
+      }
+    );
   });
 
   describe('getSelectionSpecifierFromPath', () => {
