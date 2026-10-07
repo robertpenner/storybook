@@ -7,6 +7,7 @@ import Markdown from 'markdown-to-jsx';
 import { transparentize } from 'polished';
 import type { CSSObject } from 'storybook/theming';
 import { srOnlyStyles, srOnlyUnsetStyles, styled } from 'storybook/theming';
+import type { ArgsInteraction } from 'storybook/preview-api';
 
 import type { ArgControlProps } from './ArgControl';
 import { ArgControl } from './ArgControl';
@@ -18,6 +19,8 @@ interface ArgRowProps {
   row: ArgType;
   arg: any;
   updateArgs?: (args: Args) => void;
+  argsInteraction?: ArgsInteraction;
+  resetVersion?: number;
   compact?: boolean;
   expandable?: boolean;
   initialExpandedArgs?: boolean;

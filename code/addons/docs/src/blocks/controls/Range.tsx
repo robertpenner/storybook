@@ -1,5 +1,5 @@
 import type { ChangeEvent, FC } from 'react';
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 
 import { darken, lighten, rgba } from 'polished';
 import { styled } from 'storybook/theming';
@@ -173,6 +173,17 @@ function rangeProgress(value: number, min: number, max: number) {
   return `${Number.isFinite(percentage) ? Math.max(0, Math.min(100, percentage)) : 0}%`;
 }
 
+const rangeKeys = new Set([
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+  'PageUp',
+  'PageDown',
+  'Home',
+  'End',
+]);
+
 export const RangeControl: FC<RangeProps> = ({
   name,
   storyId,
@@ -184,13 +195,46 @@ export const RangeControl: FC<RangeProps> = ({
   step = 1,
   onBlur,
   onFocus,
+  onGestureStart,
+  onGestureFinish,
+  onGestureCancel,
+  resetVersion,
   argType,
   required,
 }) => {
   const numberOFDecimalsPlaces = useMemo(() => getNumberOfDecimalPlaces(step), [step]);
+  const gesture = useRef<{
+    source: 'pointer' | 'keyboard';
+    start: NumberValue | null | undefined;
+    last: NumberValue | null | undefined;
+  }>();
+
+  useEffect(() => {
+    gesture.current = undefined;
+  }, [resetVersion]);
+
+  const begin = (source: 'pointer' | 'keyboard') => {
+    if (gesture.current) {
+      return;
+    }
+    gesture.current = { source, start: value, last: value };
+    onGestureStart?.();
+  };
+  const finish = () => {
+    const current = gesture.current;
+    gesture.current = undefined;
+    if (current) {
+      onGestureFinish?.(current.last);
+    }
+  };
 
   const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
-    onChange(parse(event.currentTarget.value));
+    const next = parse(event.currentTarget.value);
+    if (gesture.current) {
+      // React can restore older controlled props before pointerup or keyup.
+      gesture.current.last = next;
+    }
+    onChange(next);
   };
 
   const readonly = !!argType?.table?.readonly;
@@ -210,8 +254,45 @@ export const RangeControl: FC<RangeProps> = ({
         type="range"
         disabled={readonly}
         onChange={handleChange}
+        onPointerDown={(event) => {
+          if (event.button !== 0) {
+            return;
+          }
+          begin('pointer');
+          event.currentTarget.setPointerCapture(event.pointerId);
+        }}
+        onPointerUp={(event) => {
+          if (gesture.current?.source === 'pointer') {
+            finish();
+          }
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+          }
+        }}
+        onPointerCancel={(event) => {
+          const current = gesture.current;
+          gesture.current = undefined;
+          if (current) {
+            onGestureCancel?.(current.start);
+          }
+          event.currentTarget.blur();
+        }}
+        onKeyDown={(event) => {
+          if (rangeKeys.has(event.key)) {
+            begin('keyboard');
+          }
+        }}
+        onKeyUp={(event) => {
+          if (rangeKeys.has(event.key) && gesture.current?.source === 'keyboard') {
+            finish();
+          }
+        }}
+        onBlur={(event) => {
+          finish();
+          onBlur?.(event);
+        }}
         aria-required={required || undefined}
-        {...{ name, min, max, step, onFocus, onBlur }}
+        {...{ name, min, max, step, onFocus }}
         style={rangeStyle}
         value={value ?? min}
       />

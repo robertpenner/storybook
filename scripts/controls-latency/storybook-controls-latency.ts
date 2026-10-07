@@ -255,6 +255,9 @@ function instrument(experiment: string) {
     channel.on('storyArgsUpdated', (detail: ObservedEvent['detail']) =>
       record('manager:ack', { detail })
     );
+    channel.on('argsInteractionResult', (detail: ObservedEvent['detail']) =>
+      record('interactionComplete', { detail })
+    );
   } else if (experiment === 'no-a11y') {
     const render = window.__STORYBOOK_PREVIEW__.storyRenders[0];
     render.story.parameters.a11y.test = 'off';
@@ -382,17 +385,21 @@ async function verifyInteractions(
   await page.keyboard.up('End');
   await expectValue(0, 'reset while End is held');
   if (
-    inputPath === 'args' &&
+    ['args', 'manager'].includes(inputPath) &&
     process.env.INTERACTION === 'continuous' &&
     (await preview.evaluate(() =>
       window.__STORYBOOK_PREVIEW__.currentRender?.supportsArgsInteraction()
     ))
   ) {
     await slider.focus();
-    await slider.dispatchEvent('pointerdown', { pointerId: 1 });
+    const cancelBox = await slider.boundingBox();
+    assert.ok(cancelBox, 'Cancellation slider bounds are unavailable');
+    await page.mouse.move(cancelBox.x + 8, cancelBox.y + cancelBox.height / 2);
+    await page.mouse.down();
     await page.keyboard.down('End');
     await slider.dispatchEvent('pointercancel', { pointerId: 1 });
     await page.keyboard.up('End');
+    await page.mouse.up();
     await expectValue(0, 'synthetic pointer cancellation');
   }
   await slider.focus();
@@ -641,14 +648,10 @@ async function measure(
         'Final hook args are stale'
       );
     }
-    if (interaction === 'continuous' && storyCase === 'baseline' && inputPath === 'args') {
+    if (interaction === 'continuous' && storyCase === 'baseline') {
       assert.equal(summary.finalCanvasCommits, 1, 'Final canvas was rendered more than once');
     }
-    if (
-      interaction === 'continuous' &&
-      inputPath === 'args' &&
-      !['play', 'mount'].includes(storyCase)
-    ) {
+    if (interaction === 'continuous' && !['play', 'mount'].includes(storyCase)) {
       assert.equal(
         summary.interactionResult?.status,
         'completed',
@@ -690,6 +693,7 @@ async function measure(
       }
     );
     await writeFile(resolve(out, `${stem}.json`), JSON.stringify({ ...capture, checks }, null, 2));
+    assert.deepEqual(errors, [], 'Browser errors during workflow checks');
   }
   await context.close();
   return { storyCase, inputPath, repetition, ...summary };

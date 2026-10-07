@@ -1,5 +1,15 @@
 # Controls latency on the `next` fork
 
+## Manager integration checkpoint (#3078)
+
+Manager range controls now use the shared continuous args interaction for prepared, capable local canvas stories. Pointer release, range-key release, and blur finish the gesture. Pointer cancellation restores its starting value. Reset clears pending local gesture state, and navigation disposes the previous story's client. Other controls, docs, remote stories, test entries, and incapable previews retain ordinary updates.
+
+The integration passes 11,953 full-suite tests, core/docs type checks, compilation, and the complete internal UI build. The suite exposed an unsupported-context regression: the manager hook requested a channel before checking capability. The hook now requests it only for supported stories.
+
+Initial three-run captures retain accessibility and the original budgets. Development manager cadence is 83.0-98.7 displayed changes/s with matched p95 10.2-10.7 ms; built cadence is 74.8-83.5/s with matched p95 10.1-10.3 ms. Every capture reaches 1000, reports exact completion and a passed final accessibility check, renders one final baseline canvas, and records no obsolete display or track mismatch. Keyboard, held-key blur/reset, pointer cancellation, pause, and navigation checks pass.
+
+Acceptance remains incomplete. All three development manager captures exceed the post-release long-frame allowance (six frames over 25 ms, against a local count of zero). Two built manager captures miss the relative cadence budget. A separate development probe with automatic accessibility disabled still fails, so removing accessibility does not resolve the remaining manager cost. These captures and the CPU profile are retained in the resumed AFK run's `3078-*` scratch directories. No budget was relaxed, and this checkpoint does not complete #3078.
+
 The diagnostic story and browser runner reproduce [Penner #3073](https://github.com/robertpenner/penner/issues/3073) against `robertpenner/storybook` at `6643f314a1ebf29a2736536970b49e53d92bdd87`. This is the unmodified fork runtime. The story adds a dark, cheap moving marker and a numeric output; it does not change production Controls or args behavior.
 
 ## Run it

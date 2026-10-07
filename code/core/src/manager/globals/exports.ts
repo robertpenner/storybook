@@ -357,6 +357,7 @@ export default {
     'useAddonState',
     'useArgTypes',
     'useArgs',
+    'useArgsInteraction',
     'useChannel',
     'useGlobalTypes',
     'useGlobals',

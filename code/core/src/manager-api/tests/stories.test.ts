@@ -528,6 +528,7 @@ describe('stories API', () => {
         id: 'component-a--story-1',
         parameters: { a: 'b' },
         args: { c: 'd' },
+        argsInteraction: true,
       });
       // Let the promise/await chain resolve
       await new Promise((r) => setTimeout(r, 0));
@@ -543,7 +544,38 @@ describe('stories API', () => {
         prepared: true,
         parameters: { a: 'b' },
         args: { c: 'd' },
+        argsInteraction: true,
       });
+    });
+    it('replaces the prepared interaction capability when the preview changes support', async () => {
+      const moduleArgs = createMockModuleArgs({ fullAPI: { setOptions: vi.fn() } });
+      const { api } = initStories(moduleArgs as unknown as ModuleArgs);
+      const { provider, store } = moduleArgs;
+      await api.setIndex({ v: 5, entries: mockEntries });
+      const update = { id: 'component-a--story-1', parameters: {}, args: {} };
+      provider.channel.emit(STORY_PREPARED, { ...update, argsInteraction: true });
+      expect(store.getState().index!['component-a--story-1']).toHaveProperty(
+        'argsInteraction',
+        true
+      );
+      provider.channel.emit(STORY_PREPARED, { ...update, argsInteraction: false });
+      expect(store.getState().index!['component-a--story-1']).toHaveProperty(
+        'argsInteraction',
+        false
+      );
+    });
+    it('clears prior capability when an older preview omits it', async () => {
+      const moduleArgs = createMockModuleArgs({ fullAPI: { setOptions: vi.fn() } });
+      const { api } = initStories(moduleArgs as unknown as ModuleArgs);
+      const { provider, store } = moduleArgs;
+      await api.setIndex({ v: 5, entries: mockEntries });
+      const update = { id: 'component-a--story-1', parameters: {}, args: {} };
+      provider.channel.emit(STORY_PREPARED, { ...update, argsInteraction: true });
+      provider.channel.emit(STORY_PREPARED, update);
+      expect(store.getState().index!['component-a--story-1']).toHaveProperty(
+        'argsInteraction',
+        false
+      );
     });
 
     describe('docs entries', () => {
