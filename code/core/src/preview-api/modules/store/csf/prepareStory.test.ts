@@ -13,8 +13,12 @@ import type {
 
 import type { UserEventObject } from 'storybook/test';
 
+import { Channel } from '../../../../channels/index.ts';
+import { ARGS_INTERACTION_RESULT, STORY_RENDERED } from '../../../../core-events/index.ts';
+import type { ArgsInteraction } from '../../../../shared/args-interaction.ts';
+
 import { Tag } from '../../../../shared/constants/tags.ts';
-import { HooksContext, addons } from '../../addons/index.ts';
+import { HooksContext, addons, useArgsInteraction } from '../../addons/index.ts';
 import { UNTARGETED } from '../args.ts';
 import { composeConfigs } from './composeConfigs.ts';
 import { normalizeProjectAnnotations } from './normalizeProjectAnnotations.ts';
@@ -71,6 +75,41 @@ const addExtraContext = (
 };
 
 describe('prepareStory', () => {
+  it('exposes a stable interaction hook and disposes pending completion with story hooks', async () => {
+    const channel = new Channel({});
+    addons.setChannel(channel);
+    let interaction: ArgsInteraction<{ value: number }> | undefined;
+    const story = prepareStory(
+      { id, name, moduleExport },
+      { id, title },
+      {
+        render: () => {
+          interaction = useArgsInteraction<{ value: number }>();
+        },
+      }
+    );
+    const context = addExtraContext({ ...story, args: { value: 0 }, globals: {} });
+    context.argsInteraction = true;
+    story.unboundStoryFn(context);
+    channel.emit(STORY_RENDERED, id);
+    const first = interaction!;
+    expect(first.begin()).toBe(true);
+    const completion = first.finish({ value: 9 });
+    story.unboundStoryFn(context);
+    channel.emit(STORY_RENDERED, id);
+    expect(interaction).toBe(first);
+    (context.hooks as HooksContext<Renderer>).clean();
+    await expect(completion).resolves.toEqual({ status: 'cancelled' });
+    expect(channel.listenerCount(ARGS_INTERACTION_RESULT)).toBe(0);
+  });
+
+  it('records before hooks inherited from the project for final canvas reuse', () => {
+    const story = { id, name, moduleExport };
+    expect(prepareStory(story, { id, title, render }, {}).hasBeforeEach).toBe(false);
+    expect(prepareStory(story, { id, title, render }, { beforeEach: () => {} }).hasBeforeEach).toBe(
+      true
+    );
+  });
   describe('tags', () => {
     it('story tags override component', () => {
       const { tags } = prepareStory(
@@ -867,6 +906,7 @@ describe('prepareMeta', () => {
       renderToCanvas,
       testingLibraryRender,
       usesMount,
+      hasBeforeEach,
       ...preparedStory
     } = prepareStory({ id, name, moduleExport }, meta, { render });
 

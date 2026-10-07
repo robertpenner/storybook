@@ -111,3 +111,24 @@ Three untraced repetitions per condition used the existing gesture and unchanged
 Every preview capture reached 1000 with zero obsolete displays after convergence. Removing obsolete audit waits improves development cadence and matched latency; main-thread axe work still prevents local-state-relative cadence. Continuous interactions in the next ticket must defer automatic audits during the gesture and await the final audit without disabling accessibility for ordinary updates.
 
 The full fork suite passes 11,891 tests, with 36 expected failures, 39 skipped, and 2 todo. Core and addon-a11y compilation/checking and the full internal Storybook build pass. The new regressions cover configuration isolation, cancellation of running and pending waits, already-aborted requests, recovery after audit errors, suppression of obsolete reports, and final-revision completion.
+
+## Opt-in continuous preview interactions
+
+Set `INTERACTION=continuous CHECK_PATHS=args WORKFLOWS=1` to exercise `useArgsInteraction` through the preview slider. The manager range remains ordinary until its separate integration. `CHECK_PATHS` selects budget and workflow assertions; all three paths are still captured.
+
+The slider records the value delivered by `onChange` and commits that value on release, keyup, or blur. In development React restored the old controlled value between Home input and keyup: input delivered 0, keyup observed 1000. Recording the delivered input fixes that rollback. Pointer cancellation restores starting args. Reset and navigation invalidate the old completion.
+
+Three untraced repetitions passed the unchanged relative budgets with automatic accessibility enabled:
+
+| Mode        | Preview displayed changes/s |  Matched p95 | Final completion after release |
+| ----------- | --------------------------: | -----------: | -----------------------------: |
+| Development |                   81.6–99.4 | 10.3–10.6 ms |                   24.8–25.7 ms |
+| Built       |                   92.1–99.7 |   1.8–2.0 ms |                   67.1–68.7 ms |
+
+All six reached 1000, emitted exactly one final canvas commit, returned `completed` with args 1000, and published a passed final accessibility report. Finite-animation, loader-delay, beforeEach-delay, and afterEach-delay captures also passed in development and built modes. The final loader output and hook args agreed with the final input. Keyboard Home/ArrowRight, held-key blur, reset during held End, synthetic pointer cancellation, and same-document story navigation passed for supported previews.
+
+An earlier built batch failed one changed-gap budget: its third preview run had a 41.9 ms changed-gap p95 and a 28.2 ms input-delivery-gap p95. Commit p95 remained 1.8 ms; measured host load averages were 27.0/20.0/14.1. The complete repeated batch passed without code or budget changes. Preserve the failed batch when comparing results.
+
+Play and destructured-mount fixtures advertise no continuous capability; ordinary ArrowRight produces args/canvas 1. The high-frequency mount capture reloaded its document through the existing ordinary remount path and cannot provide a complete latency sample. No continuous performance claim is made for these unsupported fixtures.
+
+Raw evidence lives under `/Users/robertpenner/git/penner-agent-scratch/pr-3079/run-XGfpUI3n`: `3077-dev-canonical`, `3077-built-canonical`, `3077-built-canonical-2`, `3077-dev-supported-matrix`, `3077-built-supported-matrix-2`, and `3077-fallback-keyboard.log`.

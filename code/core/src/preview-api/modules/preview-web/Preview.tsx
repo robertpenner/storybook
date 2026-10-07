@@ -45,6 +45,18 @@ import type {
 
 import { global } from '@storybook/global';
 
+import {
+  ARGS_INTERACTION_BEGIN,
+  ARGS_INTERACTION_UPDATE,
+  ARGS_INTERACTION_FINISH,
+  ARGS_INTERACTION_CANCEL,
+  ARGS_INTERACTION_RESULT,
+  type ArgsInteractionIdentity,
+  type ArgsInteractionUpdatePayload,
+  type ArgsInteractionFinishPayload,
+} from '../../../core-events/index.ts';
+import { argsUpdateMatches } from '../../../shared/args-interaction.ts';
+
 import { StoryStore, composeProjectAnnotationsWithCore } from '../../store.ts';
 import { addons } from '../addons/index.ts';
 import type { CsfDocsRender } from './render/CsfDocsRender.ts';
@@ -142,6 +154,10 @@ export class Preview<TRenderer extends Renderer> {
   }
 
   setupListeners() {
+    this.channel.on(ARGS_INTERACTION_BEGIN, this.onArgsInteractionBegin.bind(this));
+    this.channel.on(ARGS_INTERACTION_UPDATE, this.onArgsInteractionUpdate.bind(this));
+    this.channel.on(ARGS_INTERACTION_FINISH, this.onArgsInteractionFinish.bind(this));
+    this.channel.on(ARGS_INTERACTION_CANCEL, this.onArgsInteractionCancel.bind(this));
     this.channel.on(STORY_INDEX_INVALIDATED, this.onStoryIndexChanged.bind(this));
     this.channel.on(UPDATE_GLOBALS, this.onUpdateGlobals.bind(this));
     this.channel.on(UPDATE_STORY_ARGS, this.onUpdateArgs.bind(this));
@@ -252,6 +268,7 @@ export class Preview<TRenderer extends Renderer> {
   }: {
     getProjectAnnotations: () => MaybePromise<ProjectAnnotations<TRenderer>>;
   }) {
+    this.storyRenders.forEach((render) => render.cancelArgsInteraction());
     delete this.previewEntryError;
     this.getProjectAnnotations = getProjectAnnotations;
 
@@ -301,6 +318,7 @@ export class Preview<TRenderer extends Renderer> {
     importFn?: ModuleImportFn;
     storyIndex?: StoryIndex;
   }) {
+    this.storyRenders.forEach((render) => render.cancelArgsInteraction());
     if (!this.storyStoreValue) {
       throw new CalledPreviewMethodBeforeInitializationError({ methodName: 'onStoriesChanged' });
     }
@@ -344,7 +362,11 @@ export class Preview<TRenderer extends Renderer> {
       } satisfies GlobalsUpdatedPayload);
     }
 
-    await Promise.all(this.storyRenders.map((r) => r.rerender()));
+    await Promise.all(
+      this.storyRenders.map((render) =>
+        this.renderWithArgsInteractionAck(render, () => render.rerender())
+      )
+    );
   }
 
   async onUpdateArgs({ storyId, updatedArgs }: { storyId: StoryId; updatedArgs: Args }) {
@@ -377,6 +399,61 @@ export class Preview<TRenderer extends Renderer> {
       storyId,
       args,
     });
+  }
+
+  onArgsInteractionBegin(identity: ArgsInteractionIdentity) {
+    const render = this.storyRenders.find(
+      (r) => r.id === identity.storyId && r.viewMode === 'story'
+    );
+    if (!render?.beginArgsInteraction(identity.interactionId)) {
+      this.channel.emit(ARGS_INTERACTION_RESULT, { ...identity, status: 'unsupported' });
+    }
+  }
+
+  onArgsInteractionUpdate({ storyId, interactionId, updatedArgs }: ArgsInteractionUpdatePayload) {
+    const render = this.storyRenders.find((r) => r.id === storyId && r.viewMode === 'story');
+    if (!this.storyStoreValue || !render?.canUpdateArgsInteraction(interactionId)) return;
+    this.storyStoreValue.args.update(storyId, updatedArgs);
+    render.updateArgsInteraction(interactionId);
+  }
+
+  async onArgsInteractionFinish({
+    storyId,
+    interactionId,
+    updatedArgs,
+  }: ArgsInteractionFinishPayload) {
+    const render = this.storyRenders.find((r) => r.id === storyId && r.viewMode === 'story');
+    if (!render?.canUpdateArgsInteraction(interactionId) || !this.storyStoreValue) return;
+    if (updatedArgs && !argsUpdateMatches(this.storyStoreValue.args.get(storyId), updatedArgs)) {
+      this.storyStoreValue.args.update(storyId, updatedArgs);
+      render.updateArgsInteraction(interactionId);
+    }
+    const result = await render.finishArgsInteraction(interactionId);
+    if (
+      result.status === 'completed' &&
+      this.storyRenders.includes(render) &&
+      this.storyStoreValue.args.get(storyId) === result.args
+    ) {
+      this.channel.emit(STORY_ARGS_UPDATED, { storyId, args: result.args });
+      this.channel.emit(ARGS_INTERACTION_RESULT, { storyId, interactionId, ...result });
+    } else {
+      this.channel.emit(ARGS_INTERACTION_RESULT, {
+        storyId,
+        interactionId,
+        status: result.status === 'completed' ? 'cancelled' : result.status,
+      });
+    }
+  }
+
+  async onArgsInteractionCancel({ storyId, interactionId }: ArgsInteractionIdentity) {
+    const render = this.storyRenders.find((r) => r.id === storyId && r.viewMode === 'story');
+    if (!render?.hasArgsInteraction(interactionId) || !this.storyStoreValue) return;
+    const session = render.cancelArgsInteraction();
+    if (!session || render.torndown || !this.storyRenders.includes(render)) return;
+    const updatedArgs = Object.fromEntries(
+      Object.keys(this.storyStoreValue.args.get(storyId)).map((key) => [key, undefined])
+    );
+    await this.onUpdateArgs({ storyId, updatedArgs: { ...updatedArgs, ...session.startArgs } });
   }
 
   async onRequestArgTypesInfo({ id, payload }: RequestData<ArgTypesRequestPayload>) {
@@ -425,17 +502,43 @@ export class Preview<TRenderer extends Renderer> {
     await this.onUpdateArgs({ storyId, updatedArgs });
   }
 
+  private async renderWithArgsInteractionAck(
+    render: StoryRender<TRenderer>,
+    operation: () => Promise<Args | undefined>
+  ) {
+    const interaction = render.cancelArgsInteraction();
+    const args = await operation();
+    if (
+      interaction &&
+      args &&
+      this.storyRenders.includes(render) &&
+      this.storyStoreValue?.args.get(render.id) === args
+    ) {
+      this.channel.emit(STORY_ARGS_UPDATED, { storyId: render.id, args });
+    }
+    return args;
+  }
+
   // ForceReRender does not include a story id, so we simply must
   // re-render all stories in case they are relevant
   async onForceReRender() {
-    await Promise.all(this.storyRenders.map((r) => r.rerender()));
+    await Promise.all(
+      this.storyRenders.map((render) =>
+        this.renderWithArgsInteractionAck(render, () => render.rerender())
+      )
+    );
   }
 
   async onForceRemount({ storyId }: { storyId: StoryId }) {
-    await Promise.all(this.storyRenders.filter((r) => r.id === storyId).map((r) => r.remount()));
+    await Promise.all(
+      this.storyRenders
+        .filter((render) => render.id === storyId)
+        .map((render) => this.renderWithArgsInteractionAck(render, () => render.remount()))
+    );
   }
 
   async onStoryHotUpdated() {
+    this.storyRenders.forEach((render) => render.cancelArgsInteraction());
     await Promise.all(this.storyRenders.map((r) => r.cancelPlayFunction()));
   }
 

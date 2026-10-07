@@ -1,4 +1,9 @@
 enum events {
+  ARGS_INTERACTION_BEGIN = 'argsInteractionBegin',
+  ARGS_INTERACTION_UPDATE = 'argsInteractionUpdate',
+  ARGS_INTERACTION_FINISH = 'argsInteractionFinish',
+  ARGS_INTERACTION_CANCEL = 'argsInteractionCancel',
+  ARGS_INTERACTION_RESULT = 'argsInteractionResult',
   CHANNEL_WS_DISCONNECT = 'channelWSDisconnect',
   CHANNEL_CREATED = 'channelCreated',
   // There was an error executing the config, likely an bug in the user's preview.js
@@ -112,6 +117,11 @@ export default events;
 // Enables: `import * as Events from ...` or `import { CHANNEL_CREATED } as Events from ...`
 // This is the preferred method
 export const {
+  ARGS_INTERACTION_BEGIN,
+  ARGS_INTERACTION_UPDATE,
+  ARGS_INTERACTION_FINISH,
+  ARGS_INTERACTION_CANCEL,
+  ARGS_INTERACTION_RESULT,
   CHANNEL_WS_DISCONNECT,
   CHANNEL_CREATED,
   CONFIG_ERROR,
@@ -190,3 +200,4 @@ export * from './data/save-story.ts';
 export * from './data/whats-new.ts';
 export * from './data/phases.ts';
 export * from './data/open-in-editor.ts';
+export * from './data/args-interaction.ts';

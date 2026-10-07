@@ -18,6 +18,9 @@ import type {
 
 import { global } from '@storybook/global';
 
+import { createArgsInteraction } from '../../../shared/args-interaction.ts';
+import type { ArgsInteraction } from '../../../shared/args-interaction.ts';
+
 import { addons } from './main.ts';
 
 interface Hook {
@@ -630,6 +633,21 @@ export function useArgs<TArgs extends Args = Args>(): [
   );
 
   return [args as TArgs, updateArgs, resetArgs];
+}
+
+/**
+ * Batch a continuous canvas gesture and await its final render, hooks, and reports.
+ * Unsupported stories use ordinary args updates and finish with `unsupported`.
+ */
+export function useArgsInteraction<TArgs extends Args = Args>(): ArgsInteraction<TArgs> {
+  const channel = addons.getChannel();
+  const { id: storyId, argsInteraction } = useStoryContext<Renderer, TArgs>();
+  const interaction = useMemo(
+    () => createArgsInteraction<TArgs>({ channel, storyId, supported: argsInteraction === true }),
+    [channel, storyId, argsInteraction]
+  );
+  useEffect(() => () => interaction.dispose(), [interaction]);
+  return interaction;
 }
 
 /**

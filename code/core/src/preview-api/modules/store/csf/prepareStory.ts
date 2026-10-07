@@ -166,6 +166,11 @@ export function prepareStory<TRenderer extends Renderer>(
     testingLibraryRender,
     renderToCanvas: projectAnnotations.renderToCanvas,
     usesMount,
+    hasBeforeEach: [
+      projectAnnotations.beforeEach,
+      componentAnnotations.beforeEach,
+      storyAnnotations.beforeEach,
+    ].some((hooks) => normalizeArrays(hooks).length > 0),
   };
 }
 export function prepareMeta<TRenderer extends Renderer>(

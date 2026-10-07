@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { useLayoutEffect, useRef, useState } from 'react';
-import { addons, useArgs } from 'storybook/preview-api';
+import React, { useLayoutEffect, useRef, useState } from 'react';
+import { addons, useArgs, useArgsInteraction } from 'storybook/preview-api';
 
 function record(kind: string, detail: Record<string, unknown> = {}) {
   window.dispatchEvent(new CustomEvent('controls-latency', { detail: { kind, ...detail } }));
@@ -9,12 +9,21 @@ function record(kind: string, detail: Record<string, unknown> = {}) {
 const channel = addons.getChannel();
 for (const event of [
   'updateStoryArgs',
+  'argsInteractionUpdate',
   'storyArgsUpdated',
   'storyRenderPhaseChanged',
   'storyRendered',
   'storyFinished',
 ]) {
-  channel.on(event, (detail: unknown) => record(event, { detail }));
+  channel.on(event, (detail: unknown) =>
+    record(event, {
+      detail,
+      value:
+        event === 'storyFinished'
+          ? Number(document.querySelector('[data-latency-output]')?.textContent)
+          : undefined,
+    })
+  );
 }
 
 function Marker({
@@ -22,16 +31,30 @@ function Marker({
   finiteAnimation,
   onChange,
   onReset,
+  onBegin,
+  onFinish,
+  onCancel,
+  loadedValue,
 }: {
   value: number;
   finiteAnimation: boolean;
   onChange: (value: number) => void;
   onReset: () => void;
+  onBegin: () => boolean;
+  onFinish: (value: number) => void;
+  onCancel: () => void;
+  loadedValue?: number;
 }) {
   const inputPath = new URLSearchParams(location.search).get('latencyInput') ?? 'manager';
   const [localValue, setLocalValue] = useState(value);
   const displayed = inputPath === 'local' ? localValue : value;
   const flash = useRef<HTMLDivElement>(null);
+  const interacting = useRef(false);
+  const latestInput = useRef(value);
+
+  useLayoutEffect(() => {
+    record('canvasCommit', { value: displayed, loadedValue });
+  });
 
   useLayoutEffect(() => {
     record('commit', { value: displayed });
@@ -56,6 +79,7 @@ function Marker({
       <h1 style={{ fontSize: 20 }}>Controls Latency</h1>
       <output
         data-latency-output={displayed}
+        data-latency-loaded={loadedValue}
         style={{
           display: 'block',
           fontSize: 28,
@@ -96,8 +120,56 @@ function Marker({
             step={1}
             value={displayed}
             style={{ display: 'block', width: '100%' }}
+            onPointerDown={() => {
+              if (!interacting.current) latestInput.current = displayed;
+              if (inputPath !== 'local') interacting.current = onBegin();
+            }}
+            onPointerUp={() => {
+              if (interacting.current) {
+                interacting.current = false;
+                onFinish(latestInput.current);
+              }
+            }}
+            onPointerCancel={() => {
+              if (interacting.current) {
+                interacting.current = false;
+                onCancel();
+              }
+            }}
+            onKeyDown={(event) => {
+              if (
+                inputPath !== 'local' &&
+                [
+                  'ArrowLeft',
+                  'ArrowRight',
+                  'ArrowUp',
+                  'ArrowDown',
+                  'Home',
+                  'End',
+                  'PageUp',
+                  'PageDown',
+                ].includes(event.key) &&
+                !interacting.current
+              ) {
+                latestInput.current = displayed;
+                interacting.current = onBegin();
+              }
+            }}
+            onKeyUp={() => {
+              if (interacting.current) {
+                interacting.current = false;
+                onFinish(latestInput.current);
+              }
+            }}
+            onBlur={() => {
+              if (interacting.current) {
+                interacting.current = false;
+                onFinish(latestInput.current);
+              }
+            }}
             onChange={(event) => {
               const nextValue = Number(event.currentTarget.value);
+              latestInput.current = nextValue;
               if (inputPath === 'local') setLocalValue(nextValue);
               else onChange(nextValue);
             }}
@@ -105,6 +177,7 @@ function Marker({
           <button
             type="button"
             onClick={() => {
+              interacting.current = false;
               if (inputPath === 'local') setLocalValue(0);
               else onReset();
             }}
@@ -131,15 +204,32 @@ const meta = {
     finiteAnimation: { control: false, table: { disable: true } },
   },
   parameters: { layout: 'fullscreen' },
-  render: function ControlsLatency() {
+  render: function ControlsLatency(_args, context) {
     const [args, updateArgs, resetArgs] = useArgs<{
       value: number;
       finiteAnimation: boolean;
     }>();
+    const interaction = useArgsInteraction<{ value: number; finiteAnimation: boolean }>();
+    const continuous =
+      new URLSearchParams(location.search).get('latencyInteraction') === 'continuous';
+    const finish = (value: number) => {
+      void interaction.finish({ value }).then((result) => {
+        record('interactionComplete', { detail: result });
+        if (result.status === 'failed') console.error('Continuous args interaction failed', result);
+      });
+    };
     return (
       <Marker
         {...args}
-        onChange={(value) => updateArgs({ value })}
+        loadedValue={context.loaded.loadedValue}
+        onBegin={() => continuous && interaction.begin()}
+        onChange={(value) => (continuous ? interaction.update({ value }) : updateArgs({ value }))}
+        onFinish={finish}
+        onCancel={() => {
+          void interaction
+            .cancel()
+            .then((result) => record('interactionComplete', { detail: result }));
+        }}
         onReset={() => resetArgs(['value'])}
       />
     );
@@ -153,9 +243,9 @@ export const Baseline: Story = {};
 export const FiniteAnimation: Story = { args: { finiteAnimation: true } };
 export const LoaderDelay: Story = {
   loaders: [
-    async () => {
+    async ({ args }) => {
       await delay('loader');
-      return {};
+      return { loadedValue: args.value };
     },
   ],
 };
@@ -163,7 +253,12 @@ export const BeforeEachDelay: Story = {
   beforeEach: async () => delay('beforeEach'),
 };
 export const AfterEachDelay: Story = {
-  afterEach: async () => delay('afterEach'),
+  afterEach: async ({ args, canvasElement }) => {
+    await delay('afterEach');
+    canvasElement
+      .querySelector('[data-latency-output]')
+      ?.setAttribute('data-latency-hook', String(args.value));
+  },
 };
 export const Play: Story = {
   play: async () => {

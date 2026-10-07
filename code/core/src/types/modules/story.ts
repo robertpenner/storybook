@@ -111,6 +111,7 @@ export type PreparedStory<TRenderer extends Renderer = Renderer> =
     testingLibraryRender?: (...args: never[]) => unknown;
     renderToCanvas?: ProjectAnnotations<TRenderer>['renderToCanvas'];
     usesMount: boolean;
+    hasBeforeEach?: boolean;
     storyGlobals: Globals;
   };
 

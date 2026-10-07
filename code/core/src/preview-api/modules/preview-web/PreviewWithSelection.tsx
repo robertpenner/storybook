@@ -247,6 +247,7 @@ export class PreviewWithSelection<TRenderer extends Renderer> extends Preview<TR
   }
 
   async onSetCurrentStory(selection: { storyId: StoryId; viewMode?: ViewMode }) {
+    this.storyRenders.forEach((render) => render.cancelArgsInteraction());
     /**
      * At the end of the initialization promise we will read the current story from the selection
      * store, so make sure we've updated it with the new selection or we'll lose track of it at the
@@ -302,6 +303,7 @@ export class PreviewWithSelection<TRenderer extends Renderer> extends Preview<TR
   // - a story selected in "docs" viewMode,
   //     in which case we render the docsPage for that story
   protected async renderSelection({ persistedArgs }: { persistedArgs?: Args } = {}) {
+    this.storyRenders.forEach((render) => render.cancelArgsInteraction());
     const { renderToCanvas } = this;
 
     if (!this.storyStoreValue || !renderToCanvas) {
@@ -455,6 +457,7 @@ export class PreviewWithSelection<TRenderer extends Renderer> extends Preview<TR
         initialArgs,
         argTypes,
         args: unmappedArgs,
+        argsInteraction: render.supportsArgsInteraction(),
       });
       // We need to update globals whenever we go in or out of an overridden story.
       // As an optimization we could check if that's the case, but it seems complex and error-prone

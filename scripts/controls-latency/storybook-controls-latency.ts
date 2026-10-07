@@ -17,6 +17,8 @@ type ObservedEvent = {
     updatedArgs?: { value?: number };
     args?: { value?: number };
     newPhase?: string;
+    status?: string;
+    reporters?: Array<{ type: string; status: string }>;
   };
   markerX?: number | null;
   controlValue?: string | null;
@@ -25,6 +27,8 @@ type ObservedEvent = {
   controlMax?: string | null;
   key?: string;
   experiment?: string;
+  loadedValue?: number | null;
+  hookValue?: number | null;
 };
 
 declare global {
@@ -113,6 +117,13 @@ export function summarize(events: ObservedEvent[]) {
   const obsolete = changed.filter(
     (frame) => convergence && frame.time > convergence.time && frame.value !== lastInput.value
   );
+  const finalCompletion = events.findLast(
+    (event) => event.kind === 'storyFinished' && event.value === lastInput.value
+  );
+  const finalFrame = frames.at(-1);
+  const interactionCompletion = events.findLast(
+    (event) => event.kind === 'interactionComplete' && event.time >= release.time
+  );
   function stageLatency(
     kind: string,
     valueOf: (event: ObservedEvent) => number | undefined | null
@@ -168,6 +179,30 @@ export function summarize(events: ObservedEvent[]) {
       max: quantile(gaps, 1),
     },
     finalValue: frames.at(-1)?.value,
+    interactionResult: interactionCompletion
+      ? {
+          status: interactionCompletion.detail?.status,
+          value: interactionCompletion.detail?.args?.value ?? null,
+          afterReleaseMs: interactionCompletion.time - release.time,
+        }
+      : null,
+    finalCanvasCommits: events.filter(
+      (event) =>
+        event.kind === 'canvasCommit' &&
+        event.value === lastInput.value &&
+        event.time >= lastInput.time
+    ).length,
+    finalLifecycle: finalCompletion
+      ? {
+          value: finalCompletion.value,
+          status: finalCompletion.detail?.status,
+          afterReleaseMs: finalCompletion.time - release.time,
+          reports:
+            finalCompletion.detail?.reporters?.map(({ type, status }) => ({ type, status })) ?? [],
+          loadedValue: finalFrame?.loadedValue ?? null,
+          hookValue: finalFrame?.hookValue ?? null,
+        }
+      : null,
     expectedFinalValue: lastInput.value,
     settlingAfterReleaseMs: convergence ? Math.max(0, convergence.time - release.time) : null,
     obsoleteDisplaysAfterConvergence: obsolete.length,
@@ -176,6 +211,10 @@ export function summarize(events: ObservedEvent[]) {
     ).length,
     stageLatencyMs: {
       previewReceipt: stageLatency('updateStoryArgs', (event) => event.detail?.updatedArgs?.value),
+      interactionPreviewReceipt: stageLatency(
+        'argsInteractionUpdate',
+        (event) => event.detail?.updatedArgs?.value
+      ),
       commit: stageLatency('commit', (event) => event.value),
       previewAcknowledgement: stageLatency(
         'storyArgsUpdated',
@@ -248,6 +287,12 @@ function instrument(experiment: string) {
       controlProgress: control?.style.getPropertyValue('--range-progress') ?? null,
       controlMin: control?.min ?? null,
       controlMax: control?.max ?? null,
+      loadedValue: output?.hasAttribute('data-latency-loaded')
+        ? Number(output.getAttribute('data-latency-loaded'))
+        : null,
+      hookValue: output?.hasAttribute('data-latency-hook')
+        ? Number(output.getAttribute('data-latency-hook'))
+        : null,
     });
     requestAnimationFrame(frame);
   }
@@ -273,7 +318,6 @@ async function verifyInteractions(
   preview: Frame,
   slider: Locator,
   inputPath: string,
-  base: string,
   storyCase: string
 ) {
   const checks: Array<{ name: string; value: number }> = [];
@@ -284,6 +328,16 @@ async function verifyInteractions(
       { timeout: 5000 }
     );
     await waitFrames(page, 30);
+    if (inputPath !== 'local') {
+      await preview.waitForFunction(
+        (value) => {
+          const render = window.__STORYBOOK_PREVIEW__.currentRender;
+          return render?.phase === 'finished' && render.storyContext().args.value === value;
+        },
+        value,
+        { timeout: 5000 }
+      );
+    }
     assert.equal(
       await preview.locator('[data-latency-output]').textContent(),
       String(value),
@@ -308,32 +362,57 @@ async function verifyInteractions(
   await expectValue(1, 'keyboard ArrowRight');
   await slider.press('Tab');
   await expectValue(1, 'blur');
+  if (inputPath !== 'local') {
+    await slider.press('Home');
+    await expectValue(0, 'home before held-key blur');
+    await slider.focus();
+    await page.keyboard.down('ArrowRight');
+    await page.keyboard.press('Tab');
+    await page.keyboard.up('ArrowRight');
+    await expectValue(1, 'blur while ArrowRight is held');
+  }
+  await slider.focus();
+  await page.keyboard.down('End');
   await page
     .getByRole('button', {
       name: inputPath === 'manager' ? 'Reset controls' : 'Reset',
       exact: true,
     })
     .click();
-  await expectValue(0, 'reset');
-  await slider.press('End');
+  await page.keyboard.up('End');
+  await expectValue(0, 'reset while End is held');
+  if (
+    inputPath === 'args' &&
+    process.env.INTERACTION === 'continuous' &&
+    (await preview.evaluate(() =>
+      window.__STORYBOOK_PREVIEW__.currentRender?.supportsArgsInteraction()
+    ))
+  ) {
+    await slider.focus();
+    await slider.dispatchEvent('pointerdown', { pointerId: 1 });
+    await page.keyboard.down('End');
+    await slider.dispatchEvent('pointercancel', { pointerId: 1 });
+    await page.keyboard.up('End');
+    await expectValue(0, 'synthetic pointer cancellation');
+  }
+  await slider.focus();
+  await page.keyboard.down('End');
   const nextCase = storyCase === 'baseline' ? 'finite-animation' : 'baseline';
   if (inputPath === 'manager') {
     await page.locator(`#diagnostics-controls-latency--${nextCase}`).click();
-    await expectValue(0, 'navigation during pending update');
   } else {
-    await page.goto(
-      `${base}iframe.html?id=diagnostics-controls-latency--${nextCase}&viewMode=story&latencyInput=${inputPath}`
+    await preview.evaluate(
+      (storyId) => window.__STORYBOOK_PREVIEW__.onSetCurrentStory({ storyId, viewMode: 'story' }),
+      `diagnostics-controls-latency--${nextCase}`
     );
-    await page.waitForFunction(
-      () => document.querySelector('[data-latency-output]')?.textContent === '0',
-      undefined,
-      { timeout: 5000 }
-    );
-    checks.push({
-      name: 'document navigation during pending update',
-      value: 0,
-    });
   }
+  await page.keyboard.up('End');
+  await preview.waitForFunction(
+    (storyId) => window.__STORYBOOK_PREVIEW__.currentRender?.id === storyId,
+    `diagnostics-controls-latency--${nextCase}`,
+    { timeout: 5000 }
+  );
+  await expectValue(0, 'story navigation while End is held');
   return checks;
 }
 
@@ -381,10 +460,12 @@ async function measure(
   }> = [];
   page.on('framenavigated', (frame) => observations.push({ kind: 'navigation', url: frame.url() }));
   const story = `diagnostics-controls-latency--${storyCase}`;
+  const interaction = process.env.INTERACTION ?? 'ordinary';
+  assert.ok(['ordinary', 'continuous'].includes(interaction), 'Unknown args interaction mode');
   const url =
     inputPath === 'manager'
       ? `${base}?path=/story/${story}`
-      : `${base}iframe.html?id=${story}&viewMode=story&latencyInput=${inputPath}`;
+      : `${base}iframe.html?id=${story}&viewMode=story&latencyInput=${inputPath}&latencyInteraction=${interaction}`;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   const canvas = inputPath === 'manager' ? page.frameLocator('#storybook-preview-iframe') : page;
   await canvas.locator('[data-latency-output]').waitFor({ timeout: 60000 });
@@ -537,35 +618,77 @@ async function measure(
     0,
     'Obsolete output appeared after convergence'
   );
-  if (process.env.WORKFLOWS === '1') {
-    const checks = await verifyInteractions(
-      page,
-      preview,
-      slider,
-      inputPath,
-      base,
-      storyCase
-    ).catch(async (error) => {
-      await writeFile(
-        resolve(out, `${stem}-workflow-failure.json`),
-        JSON.stringify(
-          {
-            error: error.message,
-            url: page.url(),
-            state: await preview.evaluate(() => ({
-              body: document.body.innerText,
-              phase: window.__STORYBOOK_PREVIEW__.currentRender?.phase,
-              storyId: window.__STORYBOOK_PREVIEW__.currentRender?.id,
-              args: window.__STORYBOOK_PREVIEW__.currentRender?.storyContext().args,
-              events: window.__controlsLatencyEvents,
-            })),
-          },
-          null,
-          2
-        )
+  if (inputPath !== 'local') {
+    assert.ok(summary.finalLifecycle, 'Final lifecycle did not complete in the observation window');
+    assert.equal(summary.finalLifecycle.status, 'success', 'Final lifecycle failed');
+    if (process.env.EXPERIMENT !== 'no-a11y') {
+      assert.ok(
+        summary.finalLifecycle.reports.some((report) => report.type === 'a11y'),
+        'Final accessibility report is missing'
       );
-      throw error;
-    });
+    }
+    if (storyCase === 'loader-delay') {
+      assert.equal(
+        summary.finalLifecycle.loadedValue,
+        summary.expectedFinalValue,
+        'Final loaded data is stale'
+      );
+    }
+    if (storyCase === 'after-each-delay') {
+      assert.equal(
+        summary.finalLifecycle.hookValue,
+        summary.expectedFinalValue,
+        'Final hook args are stale'
+      );
+    }
+    if (interaction === 'continuous' && storyCase === 'baseline' && inputPath === 'args') {
+      assert.equal(summary.finalCanvasCommits, 1, 'Final canvas was rendered more than once');
+    }
+    if (
+      interaction === 'continuous' &&
+      inputPath === 'args' &&
+      !['play', 'mount'].includes(storyCase)
+    ) {
+      assert.equal(
+        summary.interactionResult?.status,
+        'completed',
+        'Interaction completion is missing or failed'
+      );
+      assert.equal(
+        summary.interactionResult?.value,
+        summary.expectedFinalValue,
+        'Interaction acknowledged stale args'
+      );
+    }
+  }
+  if (
+    process.env.WORKFLOWS === '1' &&
+    (inputPath === 'local' ||
+      (process.env.CHECK_PATHS ?? 'args,manager').split(',').includes(inputPath))
+  ) {
+    const checks = await verifyInteractions(page, preview, slider, inputPath, storyCase).catch(
+      async (error) => {
+        await writeFile(
+          resolve(out, `${stem}-workflow-failure.json`),
+          JSON.stringify(
+            {
+              error: error.message,
+              url: page.url(),
+              state: await preview.evaluate(() => ({
+                body: document.body.innerText,
+                phase: window.__STORYBOOK_PREVIEW__.currentRender?.phase,
+                storyId: window.__STORYBOOK_PREVIEW__.currentRender?.id,
+                args: window.__STORYBOOK_PREVIEW__.currentRender?.storyContext().args,
+                events: window.__controlsLatencyEvents,
+              })),
+            },
+            null,
+            2
+          )
+        );
+        throw error;
+      }
+    );
     await writeFile(resolve(out, `${stem}.json`), JSON.stringify({ ...capture, checks }, null, 2));
   }
   await context.close();
@@ -628,6 +751,7 @@ export async function main() {
     ),
     base,
     experiment,
+    interaction: process.env.INTERACTION ?? 'ordinary',
     checkPaths,
     trace: process.env.TRACE === '1',
     budgets: {

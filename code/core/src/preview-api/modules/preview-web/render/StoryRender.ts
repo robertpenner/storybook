@@ -27,12 +27,41 @@ import type {
 
 import type { UserEventObject } from 'storybook/test';
 
+import {
+  ARGS_INTERACTION_RESULT,
+  type ArgsInteractionResult,
+} from '../../../../core-events/index.ts';
+
 import type { StoryStore } from '../../store/index.ts';
 import type { Render, RenderType } from './Render.ts';
 import { PREPARE_ABORTED } from './Render.ts';
 import { isTestEnvironment, pauseAnimations, waitForAnimations } from './animation-utils.ts';
 
 const { AbortController } = globalThis;
+
+type ArgsInteractionSession<TRenderer extends Renderer> = {
+  interactionId: string;
+  startArgs: Args;
+  pending: boolean;
+  finishing: boolean;
+  work?: Promise<void>;
+  renderedArgs?: Args;
+  context?: StoryContext<TRenderer>;
+  argsSnapshot?: Args;
+  loadedSnapshot?: Args;
+};
+
+const primitiveSnapshot = (values: Args): Args | undefined =>
+  Object.values(values).every(
+    (value) => value === null || !['object', 'function'].includes(typeof value)
+  )
+    ? { ...values }
+    : undefined;
+
+const matchesSnapshot = (snapshot: Args | undefined, values: Args) =>
+  snapshot !== undefined &&
+  Object.keys(snapshot).length === Object.keys(values).length &&
+  Object.keys(snapshot).every((key) => Object.is(snapshot[key], values[key]));
 
 export type RenderPhase =
   | 'preparing'
@@ -69,6 +98,12 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
   private abortController: AbortController;
 
   private argsUpdateController?: AbortController;
+
+  private argsInteractionSession?: ArgsInteractionSession<TRenderer>;
+
+  private transientWork?: Promise<void>;
+
+  private lastContext?: StoryContext<TRenderer>;
 
   private canvasElement?: TRenderer['canvasElement'];
 
@@ -183,12 +218,149 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
     return this.store.getStoryContext(this.story, { forceInitialArgs });
   }
 
+  supportsArgsInteraction() {
+    return (
+      this.viewMode === 'story' &&
+      !this.renderOptions.forceInitialArgs &&
+      !this.story?.playFunction &&
+      !this.story?.usesMount &&
+      !isTestEnvironment()
+    );
+  }
+
+  beginArgsInteraction(interactionId: string) {
+    if (
+      !this.supportsArgsInteraction() ||
+      !this.lastContext ||
+      this.phase !== 'finished' ||
+      this.torndown ||
+      this.argsInteractionSession
+    ) {
+      return false;
+    }
+    this.argsInteractionSession = {
+      interactionId,
+      startArgs: { ...this.store.args.get(this.id) },
+      pending: false,
+      finishing: false,
+    };
+    this.argsUpdateController?.abort();
+    return true;
+  }
+
+  hasArgsInteraction(interactionId: string) {
+    return this.argsInteractionSession?.interactionId === interactionId;
+  }
+
+  canUpdateArgsInteraction(interactionId: string) {
+    return this.hasArgsInteraction(interactionId) && !this.argsInteractionSession?.finishing;
+  }
+
+  updateArgsInteraction(interactionId: string) {
+    const session = this.argsInteractionSession;
+    if (!session || session.interactionId !== interactionId || session.finishing) return;
+    session.pending = true;
+    if (!session.work) {
+      session.work = this.renderArgsInteraction(session);
+      this.transientWork = session.work;
+    }
+  }
+
+  private async renderArgsInteraction(session: ArgsInteractionSession<TRenderer>) {
+    while (this.argsInteractionSession === session && session.pending && !this.torndown) {
+      session.pending = false;
+      const args = this.store.args.get(this.id);
+      const story = this.story!;
+      const context: StoryContext<TRenderer> = {
+        ...this.lastContext!,
+        ...this.storyContext(),
+        mount: (...args) => story.mount(context)(...args),
+        step: (label, play) => story.runStep(label, play, context),
+        loaded: { ...this.lastContext!.loaded },
+      };
+      context.context = context;
+      let errored = false;
+      const argsSnapshot = primitiveSnapshot(context.args);
+      const loadedSnapshot = primitiveSnapshot(context.loaded);
+      this.phase = 'rendering';
+      try {
+        const renderContext: RenderContext<TRenderer> = {
+          ...story,
+          kind: story.title,
+          story: story.name,
+          ...this.callbacks,
+          showError: (error) => {
+            errored = true;
+            console.error(error);
+          },
+          showException: (error) => {
+            errored = true;
+            console.error(error);
+          },
+          forceRemount: false,
+          storyContext: context,
+          storyFn: () => story.unboundStoryFn(context),
+          unboundStoryFn: story.unboundStoryFn,
+        };
+        context.renderToCanvas = async () => {
+          const teardown = await this.renderToScreen(renderContext, this.canvasElement!);
+          if (teardown) this.teardownRender = teardown;
+        };
+        await context.renderToCanvas();
+      } catch (error) {
+        errored = true;
+        console.error(error);
+      }
+      session.renderedArgs = errored ? undefined : args;
+      session.context = context;
+      session.argsSnapshot = matchesSnapshot(argsSnapshot, context.args) ? argsSnapshot : undefined;
+      session.loadedSnapshot = matchesSnapshot(loadedSnapshot, context.loaded)
+        ? loadedSnapshot
+        : undefined;
+      this.phase = 'finished';
+    }
+    session.work = undefined;
+  }
+
+  async finishArgsInteraction(interactionId: string): Promise<ArgsInteractionResult> {
+    const session = this.argsInteractionSession;
+    if (!session || session.interactionId !== interactionId || session.finishing) {
+      return { status: 'cancelled' };
+    }
+    session.finishing = true;
+    await session.work;
+    if (this.argsInteractionSession !== session || this.torndown) return { status: 'cancelled' };
+    const args = this.store.args.get(this.id);
+    const renderedArgs = await this.render({ interaction: session });
+    if (this.argsInteractionSession !== session || this.torndown) return { status: 'cancelled' };
+    this.argsInteractionSession = undefined;
+    return renderedArgs === args && this.store.args.get(this.id) === args
+      ? { status: 'completed', args }
+      : { status: 'failed' };
+  }
+
+  cancelArgsInteraction() {
+    const session = this.argsInteractionSession;
+    if (!session) return undefined;
+    this.argsInteractionSession = undefined;
+    session.pending = false;
+    this.argsUpdateController?.abort();
+    this.channel.emit(ARGS_INTERACTION_RESULT, {
+      storyId: this.id,
+      interactionId: session.interactionId,
+      status: 'cancelled',
+    });
+    return session;
+  }
+
   async render({
     initial = false,
     forceRemount = false,
+    interaction,
   }: {
     initial?: boolean;
     forceRemount?: boolean;
+    interaction?: ArgsInteractionSession<TRenderer>;
   } = {}) {
     const { canvasElement } = this;
 
@@ -242,6 +414,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
         viewMode: this.viewMode,
         abortSignal,
         argsUpdateSignal,
+        argsInteraction: this.supportsArgsInteraction(),
         canvasElement,
         loaded: {},
         step: (label, play) => runStep(label, play, context),
@@ -313,10 +486,22 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
         return;
       }
 
+      const reuseCanvas =
+        interaction &&
+        interaction.renderedArgs === renderedArgs &&
+        story.hasBeforeEach === false &&
+        matchesSnapshot(interaction.argsSnapshot, context.args) &&
+        matchesSnapshot(interaction.loadedSnapshot, context.loaded);
+      if (reuseCanvas && interaction.context) {
+        context.canvas = interaction.context.canvas;
+        context.userEvent = interaction.context.userEvent;
+        mounted = true;
+      }
       if (!mounted && !isMountDestructured) {
         await context.mount();
       }
 
+      this.lastContext = context;
       this.notYetRendered = false;
 
       if (abortSignal.aborted) {
@@ -474,7 +659,12 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
    * playing.
    */
   async rerender() {
+    this.cancelArgsInteraction();
     this.argsUpdateController?.abort();
+    if (this.transientWork) {
+      await this.transientWork;
+      this.transientWork = undefined;
+    }
     if (
       this.phase !== 'playing' &&
       (this.isPending() ||
@@ -497,6 +687,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
 
   async remount() {
     await this.teardown();
+    this.torndown = false;
     return this.render({ forceRemount: true });
   }
 
@@ -506,6 +697,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
   // as a method to abort them, ASAP, but this is not foolproof as we cannot control what
   // happens inside the user's code.
   cancelRender() {
+    this.cancelArgsInteraction();
     this.abortController.abort();
     this.argsUpdateController?.abort();
     this.rerenderEnqueued?.resolve(undefined);

@@ -65,6 +65,7 @@ export interface GlobalsUpdatedPayload {
 }
 
 export interface StoryPreparedPayload {
+  argsInteraction?: boolean;
   id: StoryId;
   parameters: Parameters;
   argTypes: ArgTypes;

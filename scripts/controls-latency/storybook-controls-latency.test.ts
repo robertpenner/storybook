@@ -141,3 +141,39 @@ test('reports range input feedback separately when preview output still lags', (
   assert.equal(summary.controlFeedback.trackSamples, 6);
   assert.equal(summary.controlFeedback.trackMismatches, 0);
 });
+
+test('reports final lifecycle separately from visual convergence and counts final canvas commits', () => {
+  const summary = summarize([
+    { kind: 'input', time: 0, value: 100 },
+    { kind: 'canvasCommit', time: 1, value: 100 },
+    { kind: 'frame', time: 5, value: 100, controlValue: '100' },
+    { kind: 'pointerup', time: 10 },
+    { kind: 'frame', time: 15, value: 100, controlValue: '100' },
+    {
+      kind: 'storyFinished',
+      time: 25,
+      value: 100,
+      detail: { status: 'success', reporters: [{ type: 'a11y', status: 'passed' }] },
+    },
+    {
+      kind: 'interactionComplete',
+      time: 26,
+      detail: { status: 'completed', args: { value: 100 } },
+    },
+    { kind: 'frame', time: 30, value: 100, controlValue: '100', loadedValue: 100, hookValue: 100 },
+  ]);
+  assert.equal(summary.finalCanvasCommits, 1);
+  assert.deepEqual(summary.interactionResult, {
+    status: 'completed',
+    value: 100,
+    afterReleaseMs: 16,
+  });
+  assert.deepEqual(summary.finalLifecycle, {
+    value: 100,
+    status: 'success',
+    afterReleaseMs: 15,
+    reports: [{ type: 'a11y', status: 'passed' }],
+    loadedValue: 100,
+    hookValue: 100,
+  });
+});
