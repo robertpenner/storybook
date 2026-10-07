@@ -18,7 +18,24 @@ Three subsequent development baseline runs and three built runs pass the unchang
 
 Navigation during a pending loader or hook can require an iframe reload. Manager selection and the preview URL now remove the previous story's args when changing stories, so that reload cannot apply an obsolete slider value to the new story. Reselecting the same story retains its URL args; globals and other query parameters remain intact. Explicit initial args for wildcard selection remain supported.
 
-The development finite-animation/loader/beforeEach/afterEach matrix completes all final-report and gesture workflows after that repair. One finite-animation capture records three post-release frames over 25 ms and misses that condition's numerical allowance. Its final value, lifecycle, a11y report, and navigation checks pass. Built lifecycle verification and final series review remain pending.
+The development and built finite-animation/loader/beforeEach/afterEach matrices complete all final-report and gesture workflows after that repair. One development finite-animation capture records three post-release frames over 25 ms and misses that condition's numerical allowance. Built loader and beforeEach manager cadence is 70.8/s and 75.9/s, below their relative budgets. Their final values, lifecycle, a11y reports, and navigation checks pass. These condition-specific numerical misses remain recorded separately from baseline acceptance.
+
+## Final review and acceptance checkpoint
+
+The final runtime implementation is `d63c7a4a0ff49fe6e61f631c71fd274b0828ddaa`. The complete series changes 46 files against the fixed base `6643f314a1ebf29a2736536970b49e53d92bdd87`. Standards and Spec review found that hot updates permanently disposed reusable clients and delayed busy-begin rejection dropped queued inputs. Regression tests also exposed fallback replay overwriting newer ordinary edits or applying explicitly cancelled inputs. The client now distinguishes active, finishing, and cancelling sessions, replays the latest eligible args after unsupported rejection, and remains reusable after a hot update. Both reviewers confirmed their findings resolved.
+
+The final source passes 11,970 tests (36 expected failures, 39 skipped, 2 todo), core types, core/docs/a11y compilation, and the complete internal UI build. The pushed files exactly match the reviewed snapshot; 203 focused tests pass on that committed source. Configured lint, source and Markdown formatting, and the UI detector pass. The built diagnostic screenshot shows the dark canvas and manager control at 1000.
+
+The final untraced three-run baseline batches use a11y, the original input schedule, and unchanged budgets:
+
+| Mode        | Manager displayed changes/s, runs 1/2/3 | Matched p95  | Cadence failures                           |
+| ----------- | --------------------------------------- | ------------ | ------------------------------------------ |
+| Development | 85.05 / 101.57 / 76.57                  | 10.4-10.8 ms | Run 3, required 80.66/s                    |
+| Built       | 77.94 / 90.11 / 75.55                   | 10.2-10.6 ms | Runs 1 and 3, required 80.56/s and 79.91/s |
+
+Preview args pass all baseline budgets. All paths reach exact final value 1000. Continuous paths return exact completed args, one final baseline canvas, and a passed final a11y report, with no obsolete displays or track mismatches. Pause, keyboard, held-key blur, reset, cancellation, and navigation workflows pass. Baseline matched-latency, changed-gap, and post-release budgets pass; built manager run 2 has one frame over 25 ms, with maximum 112.3 ms.
+
+These final batches fail acceptance despite earlier passing batches. The resumed AFK run ends halted on #3078's remaining manager cadence failure, and the implementation PR remains draft. No budgets were relaxed and no failed captures were discarded. A final CPU capture reproduces the manager cadence miss but does not identify a further safe repair. Remaining work is to diagnose displayed-value loss on the manager path and pass three untraced batches in both modes. The blocker is recorded in [Penner #3078](https://github.com/robertpenner/penner/issues/3078#issuecomment-6043812975). Raw final captures, profiles, checks, and screenshots remain in the resumed run's `final-series-*` scratch paths.
 
 The diagnostic story and browser runner reproduce [Penner #3073](https://github.com/robertpenner/penner/issues/3073) against `robertpenner/storybook` at `6643f314a1ebf29a2736536970b49e53d92bdd87`. This is the unmodified fork runtime. The story adds a dark, cheap moving marker and a numeric output; it does not change production Controls or args behavior.
 
