@@ -41,6 +41,16 @@ const getQueryString = ({
 }) => {
   const search = document?.location.search.slice(1);
   const { path, selectedKind, selectedStory, ...rest } = parse(search);
+  const currentStoryId = typeof path === 'string' ? path.match(PATH_REGEX)?.[2] : rest.id;
+  if (
+    selection &&
+    currentStoryId &&
+    currentStoryId !== '*' &&
+    currentStoryId !== selection.storyId
+  ) {
+    // A pending render can reload the iframe after selection changes.
+    delete rest.args;
+  }
   const queryStr = stringify({
     ...rest,
     ...extraParams,

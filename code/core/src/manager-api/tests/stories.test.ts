@@ -528,6 +528,7 @@ describe('stories API', () => {
         id: 'component-a--story-1',
         parameters: { a: 'b' },
         args: { c: 'd' },
+        argsInteraction: true,
       });
       // Let the promise/await chain resolve
       await new Promise((r) => setTimeout(r, 0));
@@ -543,7 +544,38 @@ describe('stories API', () => {
         prepared: true,
         parameters: { a: 'b' },
         args: { c: 'd' },
+        argsInteraction: true,
       });
+    });
+    it('replaces the prepared interaction capability when the preview changes support', async () => {
+      const moduleArgs = createMockModuleArgs({ fullAPI: { setOptions: vi.fn() } });
+      const { api } = initStories(moduleArgs as unknown as ModuleArgs);
+      const { provider, store } = moduleArgs;
+      await api.setIndex({ v: 5, entries: mockEntries });
+      const update = { id: 'component-a--story-1', parameters: {}, args: {} };
+      provider.channel.emit(STORY_PREPARED, { ...update, argsInteraction: true });
+      expect(store.getState().index!['component-a--story-1']).toHaveProperty(
+        'argsInteraction',
+        true
+      );
+      provider.channel.emit(STORY_PREPARED, { ...update, argsInteraction: false });
+      expect(store.getState().index!['component-a--story-1']).toHaveProperty(
+        'argsInteraction',
+        false
+      );
+    });
+    it('clears prior capability when an older preview omits it', async () => {
+      const moduleArgs = createMockModuleArgs({ fullAPI: { setOptions: vi.fn() } });
+      const { api } = initStories(moduleArgs as unknown as ModuleArgs);
+      const { provider, store } = moduleArgs;
+      await api.setIndex({ v: 5, entries: mockEntries });
+      const update = { id: 'component-a--story-1', parameters: {}, args: {} };
+      provider.channel.emit(STORY_PREPARED, { ...update, argsInteraction: true });
+      provider.channel.emit(STORY_PREPARED, update);
+      expect(store.getState().index!['component-a--story-1']).toHaveProperty(
+        'argsInteraction',
+        false
+      );
     });
 
     describe('docs entries', () => {
@@ -1078,6 +1110,34 @@ describe('stories API', () => {
     });
   });
   describe('selectStory', () => {
+    it.each([
+      ['a--2', undefined, '/story/a--2&globals=theme:dark'],
+      ['a--1', undefined, '/story/a--1&args=value:1&globals=theme:dark'],
+      ['a--1', 'remote', '/story/a--1&globals=theme:dark'],
+    ])(
+      'keeps URL args only when reselecting the same story (%s, %s)',
+      (target, refId, expected) => {
+        const moduleArgs = createMockModuleArgs({
+          initialState: {
+            path: '/story/a--1',
+            storyId: 'a--1',
+            refId,
+            viewMode: 'story',
+            customQueryParams: { args: 'value:1', globals: 'theme:dark' },
+          },
+        });
+        const { api } = initStories(moduleArgs as unknown as ModuleArgs);
+        api.setIndex({ v: 5, entries: navigationEntries });
+        api.selectStory(target);
+        expect(moduleArgs.navigate).toHaveBeenCalledWith(expected, undefined);
+        expect(moduleArgs.store.getState().customQueryParams).toEqual(
+          target === 'a--1' && !refId
+            ? { args: 'value:1', globals: 'theme:dark' }
+            : { globals: 'theme:dark' }
+        );
+      }
+    );
+
     it('navigates', () => {
       const initialState = { path: '/story/a--1', storyId: 'a--1', viewMode: 'story' };
       const moduleArgs = createMockModuleArgs({ initialState });
@@ -1087,6 +1147,23 @@ describe('stories API', () => {
       api.setIndex({ v: 5, entries: navigationEntries });
       api.selectStory('a--2');
       expect(navigate).toHaveBeenCalledWith('/story/a--2', undefined);
+    });
+    it('removes the previous URL args before asynchronous manager state commits', () => {
+      const moduleArgs = createMockModuleArgs({
+        initialState: {
+          path: '/story/a--1',
+          storyId: 'a--1',
+          viewMode: 'story',
+          customQueryParams: { args: 'value:1', globals: 'theme:dark' },
+        },
+      });
+      const { api } = initStories(moduleArgs as unknown as ModuleArgs);
+      api.setIndex({ v: 5, entries: navigationEntries });
+      vi.mocked(moduleArgs.store.setState).mockImplementationOnce(async () =>
+        moduleArgs.store.getState()
+      );
+      api.selectStory('a--2');
+      expect(moduleArgs.navigate).toHaveBeenCalledWith('/story/a--2&globals=theme:dark', undefined);
     });
     it('sets view mode to docs if doc-level component is selected', () => {
       const initialState = { path: '/docs/a--1', storyId: 'a--1', viewMode: 'docs' };

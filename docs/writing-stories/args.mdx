@@ -120,6 +120,83 @@ If you're using Storybook's hooks API in the story's render function, **do not**
 
 </Callout>
 
+### Continuous args interactions
+
+Use `useArgsInteraction` from `storybook/preview-api` to opt into continuous updates during a slider gesture. Ordinary `useArgs` updates keep their existing lifecycle.
+
+```tsx
+import { useArgs, useArgsInteraction, useRef } from "storybook/preview-api";
+
+function Render() {
+  const [args] = useArgs<{ value: number }>();
+  const interaction = useArgsInteraction<{ value: number }>();
+  const active = useRef(false);
+  const latestInput = useRef(args.value);
+  const begin = () => {
+    if (!active.current) {
+      latestInput.current = args.value;
+      active.current = interaction.begin();
+    }
+  };
+  const finish = () => {
+    if (!active.current) return;
+    active.current = false;
+    void interaction.finish({ value: latestInput.current }).then((result) => {
+      if (result.status === "failed") {
+        console.error("The final args interaction failed", result);
+      }
+    });
+  };
+
+  return (
+    <input
+      type="range"
+      value={args.value}
+      onPointerDown={begin}
+      onChange={(event) => {
+        latestInput.current = Number(event.currentTarget.value);
+        interaction.update({ value: latestInput.current });
+      }}
+      onPointerUp={finish}
+      onPointerCancel={() => {
+        active.current = false;
+        void interaction.cancel();
+      }}
+      onKeyDown={(event) => {
+        if (
+          [
+            "ArrowLeft",
+            "ArrowRight",
+            "ArrowUp",
+            "ArrowDown",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+          ].includes(event.key)
+        ) {
+          begin();
+        }
+      }}
+      onKeyUp={finish}
+      onBlur={finish}
+    />
+  );
+}
+```
+
+`begin()` checks the preview's advertised capability before starting an interaction. A busy canvas may still reject the request as `unsupported`; updates then use the ordinary path. If the rejection arrives after inputs or release, the client replays their merged latest args through ordinary updates, including newer edits delivered while finishing. Cancellation suppresses this replay. The result remains `unsupported` and does not certify that ordinary render's completion. During a supported interaction, Storybook serializes canvas updates and replaces obsolete pending values. Intermediate updates use the last completed loaded data and defer loaders, hooks, animation settling, reports, and automatic accessibility audits.
+
+The example records the value delivered by `onChange`. React can restore a controlled range's earlier value before `keyup` while the canvas update is pending, so a finish handler should use the recorded input value.
+
+`finish()` commits the exact final args and returns a typed result. A `completed` result means that the final canvas, required loaders and hooks, animation settling, accessibility audit, reports, and args acknowledgement have finished. If final loaders change the loaded data, or before hooks require rendering again, Storybook performs that render. It reuses an already rendered final canvas only when the final render inputs still agree.
+
+`cancel()` restores the args from the start of the interaction when the same story is still active. Its `cancelled` result means the session stopped; the ordinary restoration render may still be running. Navigation or teardown cancels pending work without changing the new story. A failed transient renderer logs its error and attempts an ordinary final render; a failed or cancelled final render does not return `completed`.
+
+A reset, ordinary args update, globals update, remount, or hot update stops an active interaction. Storybook runs the ordinary lifecycle for the resulting args, and an old finish request cannot overwrite them. A hot update preserves the client so it can begin another interaction for the same story. Calling `update()` without an active interaction also uses the ordinary path. Begin a new interaction to certify a subsequent value.
+
+Explicit test environments, play functions, destructured `mount`, docs renders, renders using initial args, and previews without this capability use ordinary args updates. Their interaction result is `unsupported`, so callers must not interpret it as verified final completion. Manual accessibility requests retain their existing behavior.
+
 </If>
 
 ## Mapping to complex arg values

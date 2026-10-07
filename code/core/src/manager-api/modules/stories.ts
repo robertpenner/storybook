@@ -91,7 +91,7 @@ type ParameterName = string;
 
 type StoryUpdate = Partial<
   Pick<API_StoryEntry, 'prepared' | 'parameters' | 'initialArgs' | 'argTypes' | 'args'>
->;
+> & { argsInteraction?: boolean };
 
 type DocsUpdate = Partial<Pick<API_DocsEntry, 'prepared' | 'parameters'>>;
 
@@ -152,7 +152,7 @@ export interface SubAPI {
    *
    * @returns {API_LeafEntry} The current story's data.
    */
-  getCurrentStoryData: () => API_LeafEntry;
+  getCurrentStoryData: () => API_LeafEntry & { argsInteraction?: boolean };
   /**
    * Returns the current story index.
    *
@@ -643,9 +643,22 @@ export const init: ModuleFn<SubAPI, SubState> = ({
 
       const gotoStory = (entry?: API_HashEntry) => {
         if (entry?.type === 'docs' || entry?.type === 'story') {
-          store.setState({ settings: { ...settings, lastTrackedStoryId: entry.id } });
-          navigateWithQueryParams(
-            `/${entry.type}/${entry.refId ? `${entry.refId}_${entry.id}` : entry.id}${scrollTo ? `#${scrollTo}` : ''}`
+          const { customQueryParams, refId: currentRefId } = store.getState();
+          const nextQueryParams = { ...customQueryParams };
+          if (entry.id !== storyId || entry.refId !== currentRefId) {
+            // An idle URL update can still contain the previous story's args.
+            delete nextQueryParams.args;
+          }
+          store.setState({
+            settings: { ...settings, lastTrackedStoryId: entry.id },
+            customQueryParams: nextQueryParams,
+          });
+          navigate(
+            buildNavigationUrl(
+              `/${entry.type}/${entry.refId ? `${entry.refId}_${entry.id}` : entry.id}${scrollTo ? `#${scrollTo}` : ''}`,
+              nextQueryParams
+            ),
+            undefined
           );
           return true;
         }
@@ -1204,7 +1217,11 @@ export const init: ModuleFn<SubAPI, SubState> = ({
     STORY_PREPARED,
     function handler(this: any, { id, ...update }: StoryPreparedPayload) {
       const { ref, sourceType } = getEventMetadata(this, fullAPI)!;
-      api.updateStory(id, { ...update, prepared: true }, ref);
+      api.updateStory(
+        id,
+        { ...update, prepared: true, argsInteraction: update.argsInteraction === true },
+        ref
+      );
 
       if (!ref) {
         if (!store.getState().hasCalledSetOptions) {

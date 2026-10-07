@@ -3,6 +3,7 @@
 /** HOOKS API */
 export {
   useArgs,
+  useArgsInteraction,
   useCallback,
   useChannel,
   useEffect,
@@ -16,6 +17,10 @@ export {
   applyHooks,
   HooksContext,
 } from './addons.ts';
+
+export { createArgsInteraction } from '../shared/args-interaction.ts';
+export type { ArgsInteraction } from '../shared/args-interaction.ts';
+export type { ArgsInteractionResult } from '../core-events/data/args-interaction.ts';
 
 /** DECORATORS API */
 export { makeDecorator } from './addons.ts';

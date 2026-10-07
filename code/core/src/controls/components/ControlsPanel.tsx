@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { STORY_FINISHED, STORY_PREPARED } from 'storybook/internal/core-events';
 import type { ArgTypes, StoryId } from 'storybook/internal/types';
@@ -10,6 +10,7 @@ import { mergeServiceArgTypes } from '../../docs-tools/argTypes/docgenServiceArg
 import {
   useArgTypes,
   useArgs,
+  useArgsInteraction,
   useChannel,
   useGlobals,
   useParameter,
@@ -87,7 +88,16 @@ function ControlsPanelTable({
   saveStory,
   createStory,
 }: ControlsPanelProps & { rows: ArgTypes; isLoading: boolean }) {
-  const [args, updateArgs, resetArgs, initialArgs] = useArgs();
+  const [args, updateArgs, resetStoryArgs, initialArgs] = useArgs();
+  const argsInteraction = useArgsInteraction();
+  const [resetVersion, setResetVersion] = useState(0);
+  const resetArgs = useCallback(
+    (argNames?: string[]) => {
+      setResetVersion((version) => version + 1);
+      resetStoryArgs(argNames);
+    },
+    [resetStoryArgs]
+  );
   const [globals] = useGlobals();
   const {
     expanded,
@@ -124,7 +134,9 @@ function ControlsPanelTable({
         args={args}
         globals={globals}
         updateArgs={updateArgs}
+        argsInteraction={argsInteraction}
         resetArgs={resetArgs}
+        resetVersion={resetVersion}
         inAddonPanel
         sort={sort}
         isLoading={isLoading}

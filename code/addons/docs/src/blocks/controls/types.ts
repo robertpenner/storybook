@@ -47,7 +47,12 @@ export interface NumberConfig {
   step?: number;
 }
 
-export type RangeConfig = NumberConfig;
+export type RangeConfig = NumberConfig & {
+  onGestureStart?: () => void;
+  onGestureFinish?: (value: NumberValue | null | undefined) => void;
+  onGestureCancel?: (value: NumberValue | null | undefined) => void;
+  resetVersion?: number;
+};
 
 export type ObjectValue = any;
 export interface ObjectConfig {}

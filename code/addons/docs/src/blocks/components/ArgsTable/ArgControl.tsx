@@ -1,7 +1,8 @@
 import type { FC } from 'react';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Link } from 'storybook/internal/components';
+import type { ArgsInteraction } from 'storybook/preview-api';
 
 import {
   BooleanControl,
@@ -20,6 +21,8 @@ export interface ArgControlProps {
   row: ArgType;
   arg: any;
   updateArgs: (args: Args) => void;
+  argsInteraction?: ArgsInteraction;
+  resetVersion?: number;
   isRequired: boolean;
   storyId?: string;
   controlsId?: string;
@@ -49,6 +52,8 @@ export const ArgControl: FC<ArgControlProps> = ({
   row,
   arg,
   updateArgs,
+  argsInteraction,
+  resetVersion,
   isRequired,
   storyId,
   controlsId,
@@ -58,6 +63,25 @@ export const ArgControl: FC<ArgControlProps> = ({
   const [isFocused, setFocused] = useState(false);
   // box because arg can be a fn (e.g. actions) and useState calls fn's
   const [boxedValue, setBoxedValue] = useState({ value: arg });
+  const gestureVersion = useRef(0);
+  const isFinishing = useRef(false);
+  const isInputFocused = useRef(false);
+  const isContinuousGesture = useRef(false);
+
+  useEffect(() => {
+    gestureVersion.current += 1;
+    isFinishing.current = false;
+    isInputFocused.current = false;
+    isContinuousGesture.current = false;
+    setFocused(false);
+  }, [resetVersion]);
+
+  useEffect(
+    () => () => {
+      gestureVersion.current += 1;
+    },
+    []
+  );
 
   useEffect(() => {
     if (!isFocused) {
@@ -68,14 +92,26 @@ export const ArgControl: FC<ArgControlProps> = ({
   const onChange = useCallback(
     (argVal: any) => {
       setBoxedValue({ value: argVal });
-      updateArgs({ [key]: argVal });
+      if (control?.type === 'range' && argsInteraction && isContinuousGesture.current) {
+        argsInteraction.update({ [key]: argVal });
+      } else {
+        updateArgs({ [key]: argVal });
+      }
       return argVal;
     },
-    [updateArgs, key]
+    [updateArgs, argsInteraction, control?.type, key]
   );
 
-  const onBlur = useCallback(() => setFocused(false), []);
-  const onFocus = useCallback(() => setFocused(true), []);
+  const onBlur = useCallback(() => {
+    isInputFocused.current = false;
+    if (!isFinishing.current) {
+      setFocused(false);
+    }
+  }, []);
+  const onFocus = useCallback(() => {
+    isInputFocused.current = true;
+    setFocused(true);
+  }, []);
 
   if (!control || control.disable) {
     const canBeSetup = control?.disable !== true && row?.type?.name !== 'function';
@@ -113,6 +149,47 @@ export const ArgControl: FC<ArgControlProps> = ({
     onChange,
     onBlur,
     onFocus,
+    ...(control.type === 'range' && {
+      resetVersion,
+      onGestureStart: () => {
+        gestureVersion.current += 1;
+        isFinishing.current = false;
+        isInputFocused.current = true;
+        setFocused(true);
+        isContinuousGesture.current = argsInteraction?.begin() === true;
+      },
+      onGestureFinish: async (value: number | null | undefined) => {
+        if (!argsInteraction || !isContinuousGesture.current) {
+          return;
+        }
+        isContinuousGesture.current = false;
+        const version = gestureVersion.current;
+        isFinishing.current = true;
+        const result = await argsInteraction.finish({ [key]: value });
+        if (version === gestureVersion.current) {
+          isFinishing.current = false;
+          if (result.status === 'completed') {
+            setBoxedValue({ value: result.args[key] });
+          }
+          if (!isInputFocused.current) {
+            setFocused(false);
+          }
+        }
+      },
+      onGestureCancel: (value: number | null | undefined) => {
+        gestureVersion.current += 1;
+        isFinishing.current = false;
+        isInputFocused.current = false;
+        setBoxedValue({ value });
+        setFocused(false);
+        if (argsInteraction && isContinuousGesture.current) {
+          isContinuousGesture.current = false;
+          void argsInteraction.cancel();
+        } else {
+          updateArgs({ [key]: value });
+        }
+      },
+    }),
   };
   const Control = Controls[control.type] || NoControl;
   return <Control {...props} {...control} controlType={control.type} />;

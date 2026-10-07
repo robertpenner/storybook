@@ -53,8 +53,9 @@ export function pauseAnimations(atEnd = true): CleanupCallback {
 // Use the Web Animations API to wait for any animations and transitions to finish
 export async function waitForAnimations(signal?: AbortSignal) {
   if (
+    signal?.aborted ||
     !(
-      'document' in globalThis &&
+      globalThis.document &&
       'getAnimations' in globalThis.document &&
       'querySelectorAll' in globalThis.document
     )
@@ -63,38 +64,44 @@ export async function waitForAnimations(signal?: AbortSignal) {
     return;
   }
 
-  let timedOut = false;
-  await Promise.race([
-    // After 50ms, retrieve any running animations and wait for them to finish
-    // If new animations are created while waiting, we'll wait for them too
-    new Promise((resolve) => {
-      setTimeout(() => {
-        const animationRoots = [globalThis.document, ...getShadowRoots(globalThis.document)];
-        const checkAnimationsFinished = async () => {
-          if (timedOut || signal?.aborted) {
-            return;
-          }
-          const runningAnimations = animationRoots
-            .flatMap((el) => el?.getAnimations?.() || [])
-            .filter((a) => a.playState === 'running' && !isInfiniteAnimation(a));
-          if (runningAnimations.length > 0) {
-            // Treat any errors (e.g. AbortError) from `finished` as also finished, even though not successfully so
-            await Promise.allSettled(runningAnimations.map(async (a) => a.finished));
-            await checkAnimationsFinished();
-          }
-        };
-        checkAnimationsFinished().then(resolve);
-      }, 100);
-    }),
+  const activeAnimations = () =>
+    [globalThis.document, ...getShadowRoots(globalThis.document)]
+      .flatMap((root) => root.getAnimations())
+      .filter(
+        (animation) =>
+          (animation.pending || animation.playState === 'running') &&
+          !isInfiniteAnimation(animation)
+      );
 
-    // If animations don't finish within the timeout, continue without waiting
-    new Promise((resolve) =>
-      setTimeout(() => {
-        timedOut = true;
-        resolve(void 0);
-      }, ANIMATION_TIMEOUT)
-    ),
-  ]);
+  let animations = activeAnimations();
+  if (!animations.length) {
+    return;
+  }
+
+  let stopped = false;
+  let stopWaiting = () => {};
+  const interrupted = new Promise<void>((resolve) => {
+    stopWaiting = () => {
+      stopped = true;
+      resolve();
+    };
+  });
+  const timeout = setTimeout(stopWaiting, ANIMATION_TIMEOUT);
+  signal?.addEventListener('abort', stopWaiting, { once: true });
+  try {
+    while (animations.length && !stopped) {
+      await Promise.race([
+        Promise.allSettled(animations.map((animation) => animation.finished)),
+        interrupted,
+      ]);
+      if (!stopped) {
+        animations = activeAnimations();
+      }
+    }
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', stopWaiting);
+  }
 }
 
 function getShadowRoots(doc: Document | ShadowRoot) {
@@ -107,11 +114,5 @@ function getShadowRoots(doc: Document | ShadowRoot) {
 }
 
 function isInfiniteAnimation(anim: Animation) {
-  if (anim instanceof CSSAnimation && anim.effect instanceof KeyframeEffect && anim.effect.target) {
-    const style = getComputedStyle(anim.effect.target, anim.effect.pseudoElement);
-    const index = style.animationName?.split(', ').indexOf(anim.animationName);
-    const iterations = style.animationIterationCount.split(', ')[index];
-    return iterations === 'infinite';
-  }
-  return false;
+  return anim.effect?.getComputedTiming().endTime === Infinity;
 }

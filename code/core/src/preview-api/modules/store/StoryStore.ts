@@ -319,7 +319,7 @@ export class StoryStore<TRenderer extends Renderer> {
             if (key === 'story' && entry.subtype === 'test') {
               return { ...storyAcc, story: entry.parentName };
             }
-            if (key === 'moduleExport') {
+            if (key === 'moduleExport' || key === 'hasBeforeEach') {
               return storyAcc;
             }
             if (typeof value === 'function') {

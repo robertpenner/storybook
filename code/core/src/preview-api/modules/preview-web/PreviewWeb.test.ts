@@ -18,6 +18,7 @@ import {
   STORY_ARGS_UPDATED,
   STORY_CHANGED,
   STORY_ERRORED,
+  STORY_FINISHED,
   STORY_MISSING,
   STORY_PREPARED,
   STORY_RENDERED,
@@ -32,6 +33,8 @@ import type { ModuleImportFn, ProjectAnnotations, Renderer } from 'storybook/int
 import { global } from '@storybook/global';
 
 import { toMerged } from 'es-toolkit/object';
+
+import { ARGS_INTERACTION_RESULT } from '../../../core-events/index.ts';
 
 import { addons } from '../addons/index.ts';
 import type { StoryStore } from '../store/index.ts';
@@ -436,6 +439,7 @@ describe('PreviewWeb', () => {
         await createAndRenderPreview();
 
         expect(mockChannel.emit).toHaveBeenCalledWith(STORY_PREPARED, {
+          argsInteraction: false,
           id: 'component-one--a',
           parameters: {
             __isArgsStory: false,
@@ -977,6 +981,143 @@ describe('PreviewWeb', () => {
       projectAnnotations.renderToCanvas.mockClear();
     });
 
+    it('advertises gestures, rejects obsolete tokens and acknowledges only final delivered args', async () => {
+      document.location.search = '?id=component-two--c';
+      const preview = await createAndRenderPreview();
+      expect(mockChannel.emit).toHaveBeenCalledWith(
+        STORY_PREPARED,
+        expect.objectContaining({ argsInteraction: true })
+      );
+      preview.onArgsInteractionBegin({ storyId: 'component-two--c', interactionId: 'gesture' });
+      preview.onArgsInteractionUpdate({
+        storyId: 'component-two--c',
+        interactionId: 'obsolete',
+        updatedArgs: { foo: 'wrong' },
+      });
+      expect(preview.storyStore.args.get('component-two--c')).toEqual({ foo: 'c' });
+      preview.onArgsInteractionUpdate({
+        storyId: 'component-two--c',
+        interactionId: 'gesture',
+        updatedArgs: { foo: 'final' },
+      });
+      await preview.onArgsInteractionFinish({
+        storyId: 'component-two--c',
+        interactionId: 'gesture',
+        updatedArgs: { foo: 'final' },
+      });
+      expect(mockChannel.emit).toHaveBeenCalledWith(ARGS_INTERACTION_RESULT, {
+        storyId: 'component-two--c',
+        interactionId: 'gesture',
+        status: 'completed',
+        args: { foo: 'final' },
+      });
+      expect(projectAnnotations.renderToCanvas).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(['globals', 'rerender', 'remount'] as const)(
+      'acknowledges current args after %s interrupts a gesture',
+      async (operation) => {
+        document.location.search = '?id=component-two--c';
+        const preview = await createAndRenderPreview();
+        mockChannel.emit.mockClear();
+        preview.onArgsInteractionBegin({ storyId: 'component-two--c', interactionId: 'gesture' });
+        preview.onArgsInteractionUpdate({
+          storyId: 'component-two--c',
+          interactionId: 'gesture',
+          updatedArgs: { foo: 'latest' },
+        });
+        if (operation === 'globals') await preview.onUpdateGlobals({ globals: { a: 'd' } });
+        else if (operation === 'rerender') await preview.onForceReRender();
+        else await preview.onForceRemount({ storyId: 'component-two--c' });
+        await waitForEvents([STORY_ARGS_UPDATED]);
+        expect(mockChannel.emit).toHaveBeenCalledWith(ARGS_INTERACTION_RESULT, {
+          storyId: 'component-two--c',
+          interactionId: 'gesture',
+          status: 'cancelled',
+        });
+        expect(mockChannel.emit).toHaveBeenCalledWith(STORY_ARGS_UPDATED, {
+          storyId: 'component-two--c',
+          args: { foo: 'latest' },
+        });
+        await preview.onArgsInteractionFinish({
+          storyId: 'component-two--c',
+          interactionId: 'gesture',
+          updatedArgs: { foo: 'obsolete' },
+        });
+        expect(preview.storyStore.args.get('component-two--c')).toEqual({ foo: 'latest' });
+      }
+    );
+
+    it('removes an initially undefined key when finish delivers an undefined patch', async () => {
+      document.location.search = '?id=component-two--c';
+      const preview = await createAndRenderPreview({
+        importFn: async (path) =>
+          path === './src/ComponentTwo.stories.js'
+            ? {
+                ...componentTwoExports,
+                c: { args: { foo: 'c', empty: undefined } },
+              }
+            : importFn(path),
+      });
+      expect(Object.hasOwn(preview.storyStore.args.get('component-two--c'), 'empty')).toBe(true);
+      preview.onArgsInteractionBegin({ storyId: 'component-two--c', interactionId: 'gesture' });
+      await preview.onArgsInteractionFinish({
+        storyId: 'component-two--c',
+        interactionId: 'gesture',
+        updatedArgs: { empty: undefined },
+      });
+      expect(Object.hasOwn(preview.storyStore.args.get('component-two--c'), 'empty')).toBe(false);
+    });
+
+    it('cancel restores the initial args and removes args introduced during the gesture', async () => {
+      document.location.search = '?id=component-two--c';
+      const preview = await createAndRenderPreview();
+      preview.onArgsInteractionBegin({ storyId: 'component-two--c', interactionId: 'gesture' });
+      preview.onArgsInteractionUpdate({
+        storyId: 'component-two--c',
+        interactionId: 'gesture',
+        updatedArgs: { foo: 'changed', added: 'during gesture' },
+      });
+      await preview.onArgsInteractionCancel({
+        storyId: 'component-two--c',
+        interactionId: 'gesture',
+      });
+      expect(preview.storyStore.args.get('component-two--c')).toEqual({ foo: 'c' });
+      expect(mockChannel.emit).toHaveBeenCalledWith(ARGS_INTERACTION_RESULT, {
+        storyId: 'component-two--c',
+        interactionId: 'gesture',
+        status: 'cancelled',
+      });
+    });
+
+    it('cancels a gesture as soon as navigation is requested', async () => {
+      document.location.search = '?id=component-two--c';
+      const preview = await createAndRenderPreview();
+      preview.onArgsInteractionBegin({ storyId: 'component-two--c', interactionId: 'gesture' });
+      mockChannel.emit.mockClear();
+      const navigation = preview.onSetCurrentStory({ storyId: 'component-one--a' });
+      expect(mockChannel.emit).toHaveBeenCalledWith(ARGS_INTERACTION_RESULT, {
+        storyId: 'component-two--c',
+        interactionId: 'gesture',
+        status: 'cancelled',
+      });
+      await navigation;
+      await waitForRender();
+    });
+
+    it('cancels a gesture on the hot-update channel signal', async () => {
+      document.location.search = '?id=component-two--c';
+      const preview = await createAndRenderPreview();
+      preview.onArgsInteractionBegin({ storyId: 'component-two--c', interactionId: 'gesture' });
+      mockChannel.emit.mockClear();
+      await preview.onStoryHotUpdated();
+      expect(mockChannel.emit).toHaveBeenCalledWith(ARGS_INTERACTION_RESULT, {
+        storyId: 'component-two--c',
+        interactionId: 'gesture',
+        status: 'cancelled',
+      });
+    });
+
     it('emits STORY_ARGS_UPDATED', async () => {
       document.location.search = '?id=component-one--a';
       await createAndRenderPreview();
@@ -991,6 +1132,100 @@ describe('PreviewWeb', () => {
         storyId: 'component-one--a',
         args: { foo: 'a', new: 'arg', one: 1 },
       });
+    });
+
+    it('acknowledges only the latest args after their queued render finishes', async () => {
+      document.location.search = '?id=component-one--a';
+      const preview = await createAndRenderPreview();
+      const [loaderGate, releaseLoader] = createGate();
+      componentOneExports.default.loaders[0].mockImplementationOnce(async () => loaderGate);
+      mockChannel.emit.mockClear();
+      projectAnnotations.renderToCanvas.mockClear();
+
+      const first = preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'first' },
+      });
+      await vi.waitFor(() => {
+        expect(componentOneExports.default.loaders[0]).toHaveBeenCalledTimes(2);
+      });
+      const skipped = preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'skipped' },
+      });
+      const latest = preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'latest' },
+      });
+      await Promise.resolve();
+      const earlyAcknowledgements = mockChannel.emit.mock.calls.filter(
+        ([event]) => event === STORY_ARGS_UPDATED
+      );
+
+      releaseLoader({ l: 'first' });
+      await Promise.all([first, skipped, latest]);
+      await vi.waitFor(() => {
+        expect(projectAnnotations.renderToCanvas).toHaveBeenCalledTimes(2);
+      });
+      await vi.waitFor(() => {
+        expect(
+          mockChannel.emit.mock.calls.filter(([event]) => event === STORY_FINISHED)
+        ).toHaveLength(2);
+      });
+
+      expect(earlyAcknowledgements).toHaveLength(0);
+      expect(
+        projectAnnotations.renderToCanvas.mock.calls.map(
+          ([context]) => context.storyContext.args.foo
+        )
+      ).toEqual(['first', 'latest']);
+      const acknowledgements = mockChannel.emit.mock.calls.filter(
+        ([event]) => event === STORY_ARGS_UPDATED
+      );
+      expect(acknowledgements).toEqual([
+        [STORY_ARGS_UPDATED, { storyId: 'component-one--a', args: { foo: 'latest', one: 1 } }],
+      ]);
+      const events = mockChannel.emit.mock.calls.map(([event]) => event);
+      expect(events.lastIndexOf(STORY_FINISHED)).toBeLessThan(events.indexOf(STORY_ARGS_UPDATED));
+    });
+
+    it('does not acknowledge a final value when its render fails', async () => {
+      document.location.search = '?id=component-one--a';
+      const preview = await createAndRenderPreview();
+      projectAnnotations.renderToCanvas.mockRejectedValueOnce(new Error('render failed'));
+      mockChannel.emit.mockClear();
+
+      await preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'failed' },
+      });
+      await waitForEvents([STORY_FINISHED]);
+
+      expect(mockChannel.emit).toHaveBeenCalledWith(
+        STORY_FINISHED,
+        expect.objectContaining({ storyId: 'component-one--a', status: 'error' })
+      );
+      expect(mockChannel.emit).not.toHaveBeenCalledWith(STORY_ARGS_UPDATED, expect.anything());
+    });
+
+    it('does not acknowledge args after navigating away from their active render', async () => {
+      document.location.search = '?id=component-one--a';
+      const preview = await createAndRenderPreview();
+      const [canvasGate, releaseCanvas] = createGate();
+      projectAnnotations.renderToCanvas.mockImplementationOnce(async () => canvasGate);
+      mockChannel.emit.mockClear();
+      projectAnnotations.renderToCanvas.mockClear();
+
+      const update = preview.onUpdateArgs({
+        storyId: 'component-one--a',
+        updatedArgs: { foo: 'departed' },
+      });
+      await vi.waitFor(() => expect(projectAnnotations.renderToCanvas).toHaveBeenCalledOnce());
+      await preview.onSetCurrentStory({ storyId: 'component-one--b' });
+      releaseCanvas();
+      await update;
+
+      expect(mockChannel.emit).not.toHaveBeenCalledWith(STORY_ARGS_UPDATED, expect.anything());
     });
 
     it('sets new args on the store', async () => {
@@ -2082,6 +2317,7 @@ describe('PreviewWeb', () => {
 
         await waitForEvents([STORY_PREPARED]);
         expect(mockChannel.emit).toHaveBeenCalledWith(STORY_PREPARED, {
+          argsInteraction: false,
           id: 'component-one--b',
           parameters: expect.objectContaining({
             __isArgsStory: false,
@@ -2713,6 +2949,7 @@ describe('PreviewWeb', () => {
 
         await waitForEvents([STORY_PREPARED]);
         expect(mockChannel.emit).toHaveBeenCalledWith(STORY_PREPARED, {
+          argsInteraction: false,
           id: 'component-one--a',
           parameters: expect.objectContaining({
             __isArgsStory: false,
@@ -3059,6 +3296,7 @@ describe('PreviewWeb', () => {
         await waitForRender();
 
         expect(mockChannel.emit).toHaveBeenCalledWith(STORY_PREPARED, {
+          argsInteraction: false,
           id: 'component-one--a',
           parameters: expect.objectContaining({
             __isArgsStory: false,

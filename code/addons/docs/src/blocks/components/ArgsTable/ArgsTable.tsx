@@ -9,6 +9,7 @@ import { DocumentIcon, UndoIcon } from '@storybook/icons';
 
 import { pickBy } from 'es-toolkit/object';
 import { styled } from 'storybook/theming';
+import type { ArgsInteraction } from 'storybook/preview-api';
 
 import { EmptyBlock } from '../EmptyBlock';
 import { ArgRow } from './ArgRow';
@@ -210,6 +211,8 @@ export interface ArgsTableOptionProps {
   children?: React.ReactNode;
   updateArgs?: (args: Args) => void;
   resetArgs?: (argNames?: string[]) => void;
+  argsInteraction?: ArgsInteraction;
+  resetVersion?: number;
   compact?: boolean;
   inAddonPanel?: boolean;
   inTabPanel?: boolean;
@@ -336,6 +339,8 @@ export const ArgsTable: FC<ArgsTableProps> = (props) => {
   const {
     updateArgs,
     resetArgs,
+    argsInteraction,
+    resetVersion: externalResetVersion = 0,
     compact,
     inAddonPanel,
     inTabPanel,
@@ -352,6 +357,7 @@ export const ArgsTable: FC<ArgsTableProps> = (props) => {
 
   const isResettingRef = useRef(false);
   const [isResetting, setIsResetting] = useState(false);
+  const [resetVersion, setResetVersion] = useState(0);
 
   useEffect(() => {
     isResettingRef.current = false;
@@ -362,6 +368,7 @@ export const ArgsTable: FC<ArgsTableProps> = (props) => {
     if (!isResettingRef.current && resetArgs) {
       isResettingRef.current = true;
       setIsResetting(true);
+      setResetVersion((version) => version + 1);
       resetArgs();
     }
   }, [resetArgs]);
@@ -416,6 +423,8 @@ export const ArgsTable: FC<ArgsTableProps> = (props) => {
 
   const common = {
     updateArgs,
+    argsInteraction,
+    resetVersion: resetVersion + externalResetVersion,
     compact,
     inAddonPanel,
     initialExpandedArgs,

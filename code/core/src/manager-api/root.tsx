@@ -11,6 +11,7 @@ import React, {
 } from 'react';
 
 import type { Listener } from 'storybook/internal/channels';
+import { logger } from 'storybook/internal/client-logger';
 import {
   DOCS_PREPARED,
   SET_STORIES,
@@ -45,6 +46,7 @@ import type {
 
 import { isEqual } from 'es-toolkit/predicate';
 
+import { createArgsInteraction, type ArgsInteraction } from '../shared/args-interaction.ts';
 import { createContext } from './context.ts';
 import getInitialState from './initial-state.ts';
 import { types } from './lib/addons.ts';
@@ -510,6 +512,41 @@ export function useArgs(): [Args, (newArgs: Args) => void, (argNames?: string[])
   );
 
   return [args!, updateArgs, resetArgs, initialArgs!];
+}
+
+/** Continuous range gestures are available only for capable, local canvas stories. */
+export function useArgsInteraction(): ArgsInteraction | undefined {
+  const api = useStorybookApi();
+  const { viewMode } = useStorybookState();
+  const data = api.getCurrentStoryData();
+  const supported =
+    viewMode === 'story' &&
+    data?.type === 'story' &&
+    data.subtype !== 'test' &&
+    !data.refId &&
+    data.prepared &&
+    data.argsInteraction === true;
+  const channel = supported ? api.getChannel() : undefined;
+  const storyId = data?.id;
+  const interaction = useMemo(() => {
+    if (!supported || !channel || !storyId) {
+      return undefined;
+    }
+    const client = createArgsInteraction({ channel, storyId, supported: true });
+    return {
+      ...client,
+      async finish(updatedArgs?: Args) {
+        const result = await client.finish(updatedArgs);
+        if (result.status === 'failed') {
+          logger.warn(`Args interaction failed for story '${storyId}'.`);
+        }
+        return result;
+      },
+    };
+  }, [channel, storyId, supported]);
+
+  useEffect(() => () => interaction?.dispose(), [interaction]);
+  return interaction;
 }
 
 export function useGlobals(): [

@@ -273,6 +273,10 @@ export interface StoryContext<TRenderer extends Renderer = Renderer, TArgs = Arg
   extends StoryContextForEnhancers<TRenderer, TArgs>, Required<StoryContextUpdate<TArgs>> {
   loaded: Record<string, any>;
   abortSignal: AbortSignal;
+  /** Cancel an automatic audit when ordinary canvas args are superseded. Explicit tests omit it. */
+  argsUpdateSignal?: AbortSignal;
+  /** Whether this canvas supports an explicit continuous args gesture. */
+  argsInteraction?: boolean;
   canvasElement: TRenderer['canvasElement'];
   hooks: unknown;
   originalStoryFn: ArgsStoryFn<TRenderer>;
