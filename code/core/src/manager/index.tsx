@@ -52,6 +52,7 @@ export const Main: FC<{ provider: Provider }> = ({ provider }) => {
         >
           {(combo: Combo) => {
             const { state, api } = combo;
+            const theme = useMemo(() => ensureTheme(state.theme), [state.theme]);
             const setManagerLayoutState = useCallback<
               ComponentProps<typeof Layout>['setManagerLayoutState']
             >(
@@ -67,7 +68,7 @@ export const Main: FC<{ provider: Provider }> = ({ provider }) => {
             );
 
             return (
-              <ThemeProvider key="theme.provider" theme={ensureTheme(state.theme)}>
+              <ThemeProvider key="theme.provider" theme={theme}>
                 <LayoutProvider>
                   <App
                     key="app"

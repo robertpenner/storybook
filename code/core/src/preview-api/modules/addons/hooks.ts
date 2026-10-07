@@ -198,6 +198,8 @@ export const applyHooks =
       hooks.prevMountedDecorators ??= new Set();
       hooks.mountedDecorators = new Set([storyFn, ...decorators]);
       hooks.currentContext = context;
+      // Deferred renders replace pending effects; only the completed render commits them.
+      hooks.currentEffects = [];
       hooks.hasUpdates = false;
       let result = decorated(context);
       numberOfRenders = 1;

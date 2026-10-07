@@ -69,6 +69,30 @@ const run = (storyFn: any, decorators: DecoratorFunction[] = [], context = {}) =
 
 describe('Preview hooks', () => {
   describe('useEffect', () => {
+    it('runs only the latest deferred render effects and cleans the committed effects once', () => {
+      const effect = vi.fn();
+      const cleanup = vi.fn();
+      const stableEffect = vi.fn();
+      const storyFn = ({ args }: StoryContext) => {
+        useEffect(() => {
+          effect(args.value);
+          return cleanup;
+        }, [args.value]);
+        useEffect(stableEffect, []);
+      };
+      run(storyFn, [], { args: { value: 0 } });
+      mockChannel.on = vi.fn();
+      for (const value of [1, 2, 3]) {
+        run(storyFn, [], { args: { value } });
+      }
+      expect(effect).toHaveBeenCalledExactlyOnceWith(0);
+      expect(cleanup).not.toHaveBeenCalled();
+      hooks.renderListener(undefined);
+      expect(effect.mock.calls).toEqual([[0], [3]]);
+      expect(cleanup).toHaveBeenCalledTimes(1);
+      expect(stableEffect).toHaveBeenCalledTimes(1);
+    });
+
     it('triggers the effect from story function', () => {
       const effect = vi.fn();
       run(() => {
@@ -361,7 +385,7 @@ describe('Preview hooks', () => {
       let counter = 0;
       const storyFn = () => {
         counter += 1;
-        const callback = useCallback(() => {}, [counter]);
+        const callback = useCallback(() => {}, []);
         callbacks.push(callback);
       };
       run(storyFn);
