@@ -392,6 +392,10 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
           await waitForAnimations(abortSignal);
         }
       });
+      if (abortSignal.aborted) {
+        this.renderQueued(abortSignal);
+        return;
+      }
 
       await this.runPhase(abortSignal, 'completed', async () => {
         this.channel.emit(STORY_RENDERED, id);

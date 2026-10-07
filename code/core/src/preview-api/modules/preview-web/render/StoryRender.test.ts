@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Channel } from 'storybook/internal/channels';
 import {
@@ -71,6 +71,10 @@ const buildStore = (overrides: Partial<StoryStore<Renderer>> = {}): StoryStore<R
 
 beforeEach(() => {
   vi.restoreAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 describe('StoryRender', () => {
@@ -248,6 +252,90 @@ describe('StoryRender', () => {
     expect(renderToScreen).toHaveBeenCalledTimes(2);
     expect(loadingEvents).toHaveLength(2);
     expect(events.indexOf(STORY_FINISHED)).toBeLessThan(loadingEvents[1]);
+  });
+
+  it('does not complete or start a queued render until the active finite animation settles', async () => {
+    const [animationFinished, finishAnimation] = createGate();
+    let running = true;
+    vi.stubGlobal('document', {
+      querySelectorAll: () => [],
+      getAnimations: () =>
+        running
+          ? [
+              {
+                playState: 'running',
+                pending: false,
+                effect: { getComputedTiming: () => ({ endTime: 120 }) },
+                finished: animationFinished,
+              },
+            ]
+          : [],
+    });
+    const channel = new Channel({});
+    const emit = vi.spyOn(channel, 'emit');
+    const renderToScreen = vi.fn();
+    const render = new StoryRender(
+      channel,
+      buildStore(),
+      renderToScreen,
+      { showMain: vi.fn(), showError: vi.fn(), showException: vi.fn() },
+      entry.id,
+      'story',
+      { autoplay: false },
+      buildStory()
+    );
+
+    const initial = render.renderToElement({});
+    await vi.waitFor(() => expect(render.phase).toBe('completing'));
+    const queued = render.rerender();
+    expect(renderToScreen).toHaveBeenCalledOnce();
+    expect(emit.mock.calls.some(([event]) => event === STORY_FINISHED)).toBe(false);
+
+    running = false;
+    finishAnimation();
+    await Promise.all([initial, queued]);
+
+    expect(renderToScreen).toHaveBeenCalledTimes(2);
+    expect(emit.mock.calls.filter(([event]) => event === STORY_FINISHED)).toHaveLength(2);
+  });
+
+  it('cancels animation settling and queued work without reporting a rendered revision', async () => {
+    const [animationFinished] = createGate();
+    vi.stubGlobal('document', {
+      querySelectorAll: () => [],
+      getAnimations: () => [
+        {
+          playState: 'running',
+          pending: false,
+          effect: { getComputedTiming: () => ({ endTime: 120 }) },
+          finished: animationFinished,
+        },
+      ],
+    });
+    const channel = new Channel({});
+    const emit = vi.spyOn(channel, 'emit');
+    const renderToScreen = vi.fn();
+    const render = new StoryRender(
+      channel,
+      buildStore(),
+      renderToScreen,
+      { showMain: vi.fn(), showError: vi.fn(), showException: vi.fn() },
+      entry.id,
+      'story',
+      { autoplay: false },
+      buildStory()
+    );
+
+    const initial = render.renderToElement({});
+    await vi.waitFor(() => expect(render.phase).toBe('completing'));
+    const queued = render.rerender();
+    render.cancelRender();
+
+    expect(await queued).toBeUndefined();
+    await initial;
+    expect(renderToScreen).toHaveBeenCalledOnce();
+    expect(emit.mock.calls.some(([event]) => event === STORY_RENDERED)).toBe(false);
+    expect(emit.mock.calls.some(([event]) => event === STORY_FINISHED)).toBe(false);
   });
 
   it('calls mount if play function does not destructure mount', async () => {

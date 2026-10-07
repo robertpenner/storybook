@@ -58,7 +58,7 @@ All 806 development and 1,110 built track samples matched the current native val
 
 The draft scheduler waits for a queued rerender's canvas and ordinary lifecycle before acknowledging its args. During ordinary loading, rendering, and completion, multiple updates share one pending rerender of the latest args. The active render still completes its lifecycle and may emit `STORY_FINISHED`; intermediate pending args that never render receive no `STORY_ARGS_UPDATED` acknowledgement. Failed, aborted, and removed renders do not acknowledge their args. Updates during `play` retain their immediate rerender behavior, and destructured `mount` stories still use their existing remount path. Updates for stories with no active render retain their existing immediate acknowledgement.
 
-**This candidate regresses preview cadence and does not complete #3075.** Three untraced repetitions per condition used the same browser runner with `CHECK_PATHS=args`; the no-a11y condition uses `EXPERIMENT=no-a11y`. All nine preview runs reached exactly 1000, with zero obsolete displays after convergence, but all nine missed the local-state-relative cadence budget. The local-state reference displayed about 95-101 changes/s during these captures.
+**The original candidate regressed preview cadence.** Three untraced repetitions per condition used the same browser runner with `CHECK_PATHS=args`; the no-a11y condition uses `EXPERIMENT=no-a11y`. All nine preview runs reached exactly 1000, with zero obsolete displays after convergence, but all nine missed the local-state-relative cadence budget. The local-state reference displayed about 95-101 changes/s during these captures. The animation-settling revision below removes this regression; #3075 remains open because the a11y-enabled path still misses its budget.
 
 | Mode        | Condition                    | Preview displayed changes/s | Displayed changes per drag | Post-release frame p95 | Obsolete displays after convergence |
 | ----------- | ---------------------------- | --------------------------: | -------------------------: | ---------------------: | ----------------------------------: |
@@ -68,4 +68,27 @@ The draft scheduler waits for a queued rerender's canvas and ordinary lifecycle 
 | Built       | Candidate, a11y enabled      |                   8.68-8.69 |                         10 |             9.3-9.3 ms |                                   0 |
 | Development | Candidate, a11y disabled     |                   9.49-9.55 |                         11 |             9.1-9.2 ms |                                   0 |
 
-Disabling a11y recovers less than one displayed change/s. The ordinary renderer's `waitForAnimations()` waits at least 100 ms before checking animations, including when a story has none. Serializing that work puts a roughly ten-render/s ceiling on this candidate. Manager costs remain separate: this comparison checks the preview-only `useArgs` path and does not establish a manager Controls improvement. The draft needs a decision on animation-settling and overlapping lifecycle work before it can meet the preview cadence target.
+In the original candidate, disabling a11y recovered less than one displayed change/s. The ordinary renderer's `waitForAnimations()` waited at least 100 ms before checking animations, including when a story had none. Serializing that work put a roughly ten-render/s ceiling on the candidate.
+
+## Approved animation settling (2026-10-07)
+
+[Penner #3075](https://github.com/robertpenner/penner/issues/3075) now explicitly permits animation discovery without the fixed 100 ms delay. The renderer still serializes ordinary full lifecycles.
+
+After canvas rendering, `waitForAnimations()` queries the Web Animations API immediately. Browser style updates make CSS animations and transitions discoverable, including their start delays. Finite running or pending animations are awaited; after they settle, the document and open shadow roots are queried again to include chained animations and newly attached shadow roots. Infinite CSS and Web Animations do not block completion. The five-second limit remains, and abort or successful completion removes the timer and abort listener. An abort during animation settling cancels queued work without emitting `STORY_RENDERED` or `STORY_FINISHED` for that aborted revision.
+
+When no finite active animations exist, completion requires no timer or extra animation frame. Animations created by unrelated future timers or animation-frame callbacks after discovery are outside this contract. Authors must create those animations during rendering or await their creation in the story lifecycle. Ordinary loaders, hooks, explicit tests, reports, and destructured `mount` behavior retain their existing paths.
+
+Three untraced repetitions per mode and condition used the same gesture, Chromium 145.0.7632.6, Node 22.22.3, and unchanged `CHECK_PATHS=args` budgets. A11y remained enabled in the normal captures; the disabled captures used the existing `EXPERIMENT=no-a11y` browser-side isolation probe.
+
+| Mode        | Condition     | Preview displayed changes/s | Input-to-display p95 | Budget result |
+| ----------- | ------------- | --------------------------: | -------------------: | ------------- |
+| Development | A11y enabled  |                   41.5-49.1 |         31.2-32.7 ms | 3/3 failed    |
+| Development | A11y disabled |                  93.7-100.8 |         10.3-10.4 ms | 3/3 passed    |
+| Built       | A11y enabled  |                   52.0-57.1 |         24.9-26.6 ms | 3/3 failed    |
+| Built       | A11y disabled |                   99.8-99.9 |           2.3-2.4 ms | 3/3 passed    |
+
+All twelve preview captures displayed the exact final value 1000 and zero obsolete values after convergence. The six normal captures still fail the existing relative drag budget. The six isolated captures pass every budget. This restores baseline-level normal cadence and removes the animation wait as the dominant cost; it does not establish an a11y-enabled latency fix or a manager Controls improvement. The user chose to publish this animation repair and document the remaining cadence blocker without starting #3076.
+
+Ten animation-wait unit tests cover zero-delay completion, pending and chained finite animations, newly attached shadow roots, cancellation, the five-second limit, infinite animations, and unsupported hosts. Two additional `StoryRender` regressions verify that animation completion precedes the next queued render and that abort during settling emits no completion. Existing `PreviewWeb` regressions continue checking revision-safe args acknowledgements. The complete fork suite passes 11,884 tests, with 36 expected failures, 39 skipped, and 2 todo. Core compilation and type-checking pass.
+
+A Chromium probe against the actual development module also verified a delayed CSS animation, a delayed CSS transition, a chained animation in a newly created nested shadow root, infinite Web Animations, and prompt cancellation. The animation-free call completed in 0.7 ms, delayed CSS settled after 128.3 ms, and abort settled in 0.3 ms. Browser-runner metadata now includes hashes of the animation wait and `StoryRender` source.
