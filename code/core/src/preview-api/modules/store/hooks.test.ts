@@ -384,8 +384,8 @@ describe('Preview hooks', () => {
       const callbacks: (() => void)[] = [];
       let counter = 0;
       const storyFn = () => {
-        counter += 1;
-        const callback = useCallback(() => counter, []);
+        const value = ++counter;
+        const callback = useCallback(() => value, [value]);
         callbacks.push(callback);
       };
       run(storyFn);
