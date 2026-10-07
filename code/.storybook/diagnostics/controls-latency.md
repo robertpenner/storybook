@@ -92,3 +92,22 @@ All twelve preview captures displayed the exact final value 1000 and zero obsole
 Ten animation-wait unit tests cover zero-delay completion, pending and chained finite animations, newly attached shadow roots, cancellation, the five-second limit, infinite animations, and unsupported hosts. Two additional `StoryRender` regressions verify that animation completion precedes the next queued render and that abort during settling emits no completion. Existing `PreviewWeb` regressions continue checking revision-safe args acknowledgements. The complete fork suite passes 11,884 tests, with 36 expected failures, 39 skipped, and 2 todo. Core compilation and type-checking pass.
 
 A Chromium probe against the actual development module also verified a delayed CSS animation, a delayed CSS transition, a chained animation in a newly created nested shadow root, infinite Web Animations, and prompt cancellation. The animation-free call completed in 0.7 ms, delayed CSS settled after 128.3 ms, and abort settled in 0.3 ms. Browser-runner metadata now includes hashes of the animation wait and `StoryRender` source.
+
+## Current-revision automatic accessibility audits
+
+Ordinary canvas stories without a play function receive an `argsUpdateSignal` in their render context. A subsequent rerender or teardown cancels that signal. The accessibility addon uses it to release an obsolete automatic audit wait and remove an audit that has not started. A running axe audit finishes before any subsequent axe invocation; its obsolete result does not enter the story report. Axe reset, configuration, and execution all occur inside the serial queue.
+
+The latest rendered args still await their accessibility audit before final reporting and acknowledgement. Superseded automatic revisions do not emit a successful `STORY_FINISHED`. Ordinary loaders and hooks still run. Explicit test environments, stories with play or destructured mount, docs renders, and manual accessibility requests retain their existing audit semantics.
+
+Three untraced repetitions per condition used the existing gesture and unchanged `CHECK_PATHS=args` budgets:
+
+| Mode        | Condition                | Preview displayed changes/s | Matched input-to-display p95 | Budget result |
+| ----------- | ------------------------ | --------------------------: | ---------------------------: | ------------- |
+| Development | A11y enabled             |                   58.1-61.0 |                 17.8-18.6 ms | 3/3 failed    |
+| Development | A11y disabled diagnostic |                  98.8-100.4 |                 11.0-11.5 ms | 3/3 passed    |
+| Built       | A11y enabled             |                   55.7-58.4 |                 12.2-13.0 ms | 3/3 failed    |
+| Built       | A11y disabled diagnostic |                   93.9-99.9 |                   2.3-2.7 ms | 3/3 passed    |
+
+Every preview capture reached 1000 with zero obsolete displays after convergence. Removing obsolete audit waits improves development cadence and matched latency; main-thread axe work still prevents local-state-relative cadence. Continuous interactions in the next ticket must defer automatic audits during the gesture and await the final audit without disabling accessibility for ordinary updates.
+
+The full fork suite passes 11,891 tests, with 36 expected failures, 39 skipped, and 2 todo. Core and addon-a11y compilation/checking and the full internal Storybook build pass. The new regressions cover configuration isolation, cancellation of running and pending waits, already-aborted requests, recovery after audit errors, suppression of obsolete reports, and final-revision completion.

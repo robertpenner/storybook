@@ -81,8 +81,24 @@ const runNext = async () => {
   runNext();
 };
 
-export const run = async (input: A11yParameters = DEFAULT_PARAMETERS, storyId: string) => {
+export function run(input: A11yParameters | undefined, storyId: string): Promise<AxeResults>;
+export function run(
+  input: A11yParameters | undefined,
+  storyId: string,
+  signal: AbortSignal
+): Promise<AxeResults | undefined>;
+export async function run(
+  input: A11yParameters = DEFAULT_PARAMETERS,
+  storyId: string,
+  signal?: AbortSignal
+): Promise<AxeResults | undefined> {
+  if (signal?.aborted) {
+    return undefined;
+  }
   const axeCore = await import('axe-core');
+  if (signal?.aborted) {
+    return undefined;
+  }
   // We do this workaround when Vite projects can't optimize deps in pnpm projects
   // as axe-core is UMD and therefore won't resolve.
   // In that case, we just use the global axe (which will be there as a side effect of UMD import).
@@ -124,44 +140,51 @@ export const run = async (input: A11yParameters = DEFAULT_PARAMETERS, storyId: s
     }
   }
 
-  axe.reset();
-
   const configWithDefault = {
     ...config,
     rules: [...DISABLED_RULES.map((id) => ({ id, enabled: false })), ...(config?.rules ?? [])],
   };
 
-  axe.configure(configWithDefault);
-
   const optionsWithDisabledRules = mergeDisabledRulesIntoRunOptions(options, configWithDefault);
 
-  return new Promise<AxeResults>((resolve, reject) => {
-    const highlightsRoot = document?.getElementById('storybook-highlights-root');
-    if (highlightsRoot) {
-      highlightsRoot.style.display = 'none';
-    }
-
+  return new Promise<AxeResults | undefined>((resolve, reject) => {
+    const onAbort = () => {
+      const index = queue.indexOf(task);
+      if (index !== -1) {
+        queue.splice(index, 1);
+      }
+      resolve(undefined);
+    };
     const task = async () => {
+      const highlightsRoot = document?.getElementById('storybook-highlights-root');
+      const previousDisplay = highlightsRoot?.style.display;
       try {
+        if (highlightsRoot) {
+          highlightsRoot.style.display = 'none';
+        }
+        axe.reset();
+        axe.configure(configWithDefault);
         const result = await axe.run(context, optionsWithDisabledRules);
         const resultWithLinks = withLinkPaths(result, storyId);
         resolve(resultWithLinks);
       } catch (error) {
         reject(error);
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+        if (highlightsRoot) {
+          highlightsRoot.style.display = previousDisplay ?? '';
+        }
       }
     };
 
+    signal?.addEventListener('abort', onAbort, { once: true });
     queue.push(task);
 
     if (!isRunning) {
       runNext();
     }
-
-    if (highlightsRoot) {
-      highlightsRoot.style.display = '';
-    }
   });
-};
+}
 
 channel.on(EVENTS.MANUAL, async (storyId: string, input: A11yParameters = DEFAULT_PARAMETERS) => {
   try {

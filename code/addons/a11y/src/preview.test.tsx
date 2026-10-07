@@ -98,6 +98,36 @@ describe('afterEach', () => {
       ...overrides,
     }) as any;
 
+  it('does not publish an automatic report cancelled by a newer args revision', async () => {
+    const controller = new AbortController();
+    const context = createContext({ argsUpdateSignal: controller.signal });
+    mocks.getIsVitestStandaloneRun.mockReturnValue(false);
+    mockedRun.mockResolvedValue(undefined);
+
+    await afterEach(context);
+
+    expect(mockedRun).toHaveBeenCalledWith(context.parameters.a11y, context.id, controller.signal);
+    expect(context.reporting.addReport).not.toHaveBeenCalled();
+  });
+
+  it('does not publish a report after teardown while axe is running', async () => {
+    const controller = new AbortController();
+    const context = createContext({ argsUpdateSignal: controller.signal });
+    mocks.getIsVitestStandaloneRun.mockReturnValue(false);
+    let finish!: (result: Awaited<ReturnType<typeof run>>) => void;
+    mockedRun.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const audit = afterEach(context);
+    controller.abort();
+    finish(undefined);
+    await audit;
+    expect(context.reporting.addReport).not.toHaveBeenCalled();
+  });
+
   it('should run accessibility checks and report results', async () => {
     const context = createContext();
     const result = {

@@ -68,6 +68,8 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
 
   private abortController: AbortController;
 
+  private argsUpdateController?: AbortController;
+
   private canvasElement?: TRenderer['canvasElement'];
 
   private notYetRendered = true;
@@ -224,6 +226,11 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
     // We need a stable reference to the signal -- if a re-mount happens the
     // abort controller may be torn down (above) before we actually check the signal.
     const abortSignal = this.abortController.signal;
+    this.argsUpdateController = new AbortController();
+    const argsUpdateSignal =
+      this.viewMode === 'story' && !story.playFunction && !isTestEnvironment()
+        ? AbortSignal.any([abortSignal, this.argsUpdateController.signal])
+        : undefined;
 
     let mounted = false;
 
@@ -234,6 +241,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
         ...this.storyContext(),
         viewMode: this.viewMode,
         abortSignal,
+        argsUpdateSignal,
         canvasElement,
         loaded: {},
         step: (label, play) => runStep(label, play, context),
@@ -407,6 +415,12 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
         });
       }
 
+      if (abortSignal.aborted || argsUpdateSignal?.aborted) {
+        await this.runPhase(abortSignal, 'finished');
+        this.renderQueued(abortSignal);
+        return undefined;
+      }
+
       const hasUnhandledErrors = !ignoreUnhandledErrors && unhandledErrors.size > 0;
 
       const hasSomeReportsFailed = context.reporting.reports.some(
@@ -460,6 +474,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
    * playing.
    */
   async rerender() {
+    this.argsUpdateController?.abort();
     if (
       this.phase !== 'playing' &&
       (this.isPending() ||
@@ -492,6 +507,7 @@ export class StoryRender<TRenderer extends Renderer> implements Render<TRenderer
   // happens inside the user's code.
   cancelRender() {
     this.abortController.abort();
+    this.argsUpdateController?.abort();
     this.rerenderEnqueued?.resolve(undefined);
     this.rerenderEnqueued = undefined;
   }

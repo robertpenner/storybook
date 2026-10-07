@@ -613,6 +613,8 @@ export async function main() {
         'code/.storybook/diagnostics/ControlsLatency.stories.tsx',
         'code/.storybook/main.ts',
         'code/addons/docs/src/blocks/controls/Range.tsx',
+        'code/addons/a11y/src/a11yRunner.ts',
+        'code/addons/a11y/src/preview.tsx',
         'code/core/src/preview-api/modules/preview-web/render/animation-utils.ts',
         'code/core/src/preview-api/modules/preview-web/render/StoryRender.ts',
         'code/core/template/stories/preview.ts',

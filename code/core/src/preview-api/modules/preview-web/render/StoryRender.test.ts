@@ -78,6 +78,50 @@ afterEach(() => {
 });
 
 describe('StoryRender', () => {
+  it('releases a superseded automatic audit and only finishes the final revision', async () => {
+    const channel = new Channel({});
+    const finished = vi.fn();
+    channel.on(STORY_FINISHED, finished);
+    let args = { value: 0 };
+    const store = buildStore();
+    vi.mocked(store.args.get).mockImplementation(() => args);
+    const audited: number[] = [];
+    const story = buildStory({
+      playFunction: undefined,
+      applyAfterEach: async (context) => {
+        const value = args.value;
+        if (value === 0) return;
+        if (value === 1) {
+          await new Promise<void>((resolve) => {
+            context.argsUpdateSignal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+        }
+        if (!context.argsUpdateSignal?.aborted) audited.push(value);
+      },
+    });
+    const render = new StoryRender(
+      channel,
+      store,
+      vi.fn(),
+      { showMain: vi.fn(), showException: vi.fn(), showError: vi.fn() },
+      entry.id,
+      'story',
+      { autoplay: false },
+      story
+    );
+    await render.renderToElement({});
+    finished.mockClear();
+    args = { value: 1 };
+    const obsolete = render.rerender();
+    await vi.waitFor(() => expect(render.phase).toBe('afterEach'));
+    args = { value: 2 };
+    const current = render.rerender();
+    await expect(obsolete).resolves.toBeUndefined();
+    await expect(current).resolves.toBe(args);
+    expect(audited).toEqual([2]);
+    expect(finished).toHaveBeenCalledOnce();
+  });
+
   it('does run play function if passed autoplay=true', async () => {
     const story = buildStory();
     const render = new StoryRender(

@@ -17,6 +17,7 @@ export const afterEach: AfterEach<any> = async ({
   parameters,
   globals,
   viewMode,
+  argsUpdateSignal,
 }) => {
   const a11yParameter: A11yParameters | undefined = parameters.a11y;
   const a11yGlobals = globals.a11y;
@@ -41,9 +42,11 @@ export const afterEach: AfterEach<any> = async ({
 
   if (shouldRunEnvironmentIndependent && viewMode === 'story') {
     try {
-      const result = await run(a11yParameter, storyId);
+      const result = argsUpdateSignal
+        ? await run(a11yParameter, storyId, argsUpdateSignal)
+        : await run(a11yParameter, storyId);
 
-      if (result) {
+      if (result && !argsUpdateSignal?.aborted) {
         const hasViolations = (result?.violations.length ?? 0) > 0;
 
         reporting.addReport({
@@ -80,6 +83,9 @@ export const afterEach: AfterEach<any> = async ({
        *   Storybook/portable stories handle them on a higher level.
        */
     } catch (e) {
+      if (argsUpdateSignal?.aborted) {
+        return;
+      }
       reporting.addReport({
         type: 'a11y',
         version: 1,

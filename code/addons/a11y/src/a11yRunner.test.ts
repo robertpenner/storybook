@@ -66,6 +66,73 @@ describe('a11yRunner', () => {
     expect(mockChannel.on).toHaveBeenCalledWith(EVENTS.MANUAL, expect.any(Function));
   });
 
+  it('keeps the next audit configuration unchanged until the running audit finishes', async () => {
+    let finish!: (result: AxeResults) => void;
+    axeMock.run.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const { run } = await import('./a11yRunner.ts');
+    const first = run({ config: { branding: { application: 'first' } } }, 'first');
+    await vi.waitFor(() => expect(axeMock.run).toHaveBeenCalledOnce());
+    const second = run({ config: { branding: { application: 'second' } } }, 'second');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(axeMock.configure).toHaveBeenCalledOnce();
+    finish(axeResults);
+    await Promise.all([first, second]);
+    expect(axeMock.run).toHaveBeenCalledTimes(2);
+    expect(axeMock.configure).toHaveBeenLastCalledWith(
+      expect.objectContaining({ branding: { application: 'second' } })
+    );
+  });
+
+  it('releases obsolete automatic waits and skips cancelled pending audits without overlapping axe', async () => {
+    let finish!: (result: AxeResults) => void;
+    axeMock.run.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const { run } = await import('./a11yRunner.ts');
+    const runningController = new AbortController();
+    const running = run({}, 'story', runningController.signal);
+    await vi.waitFor(() => expect(axeMock.run).toHaveBeenCalledOnce());
+    const pendingController = new AbortController();
+    const pending = run({}, 'story', pendingController.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const current = run({}, 'story', new AbortController().signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    runningController.abort();
+    pendingController.abort();
+
+    await expect(running).resolves.toBeUndefined();
+    await expect(pending).resolves.toBeUndefined();
+    expect(axeMock.run).toHaveBeenCalledOnce();
+    finish(axeResults);
+    await expect(current).resolves.toEqual(axeResults);
+    expect(axeMock.run).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not start an already cancelled audit', async () => {
+    const { run } = await import('./a11yRunner.ts');
+    const controller = new AbortController();
+    controller.abort();
+    await expect(run({}, 'story', controller.signal)).resolves.toBeUndefined();
+    expect(axeMock.run).not.toHaveBeenCalled();
+  });
+
+  it('runs an explicit audit after an automatic audit fails', async () => {
+    const { run } = await import('./a11yRunner.ts');
+    axeMock.run.mockRejectedValueOnce(new Error('audit failed'));
+    await expect(run({}, 'story', new AbortController().signal)).rejects.toThrow('audit failed');
+    await expect(run({}, 'story')).resolves.toEqual(axeResults);
+    expect(axeMock.run).toHaveBeenCalledTimes(2);
+  });
+
   it('passes disabled configured rules to axe.run when runOnly is present', async () => {
     const { run } = await import('./a11yRunner.ts');
     const input = {
